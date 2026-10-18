@@ -140,6 +140,12 @@ def test_to_features_rejects_a_frame_without_the_contract_columns() -> None:
         to_features(frame)
 
 
+def test_to_features_refuses_a_frame_that_was_never_cleaned() -> None:
+    """A raw frame still holds sex as "Male", which is not a matrix column."""
+    with pytest.raises(SchemaError, match="sex"):
+        to_features(valid_frame())
+
+
 def test_load_raw_reports_a_missing_file() -> None:
     with pytest.raises(FileNotFoundError):
         load_raw(REPO_ROOT / "data" / "raw" / "does-not-exist.csv")

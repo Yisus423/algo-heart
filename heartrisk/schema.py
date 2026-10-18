@@ -53,6 +53,17 @@ class SchemaError(ValueError):
     """Raised when data does not satisfy the contract."""
 
 
+def to_native(value: object) -> object:
+    """Convert a numpy or pandas scalar into the plain Python value it wraps.
+
+    Validation reasons about ``numbers.Real`` and ``str``. A ``numpy.int64`` is
+    not a Python ``int``, and ``numpy.bool_`` is not a Python ``bool``, so every
+    scalar is unwrapped before it is checked.
+    """
+    item = getattr(value, "item", None)
+    return item() if callable(item) else value
+
+
 @dataclass(frozen=True, slots=True)
 class Field:
     """One model input, with everything the interview needs to ask for it.

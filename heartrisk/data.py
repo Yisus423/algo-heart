@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 from .schema import (
     FEATURE_ORDER,
@@ -19,6 +20,7 @@ from .schema import (
     Field,
     SchemaError,
     encode_binary_category,
+    to_native,
     validate_value,
 )
 
@@ -52,13 +54,8 @@ def require_columns(frame: pd.DataFrame, columns: tuple[str, ...]) -> None:
 
 
 def _native(value: object) -> object:
-    """Convert a numpy or pandas scalar into the plain Python value it wraps.
-
-    ``validate_value`` reasons about ``numbers.Real`` and ``str``. A
-    ``numpy.int64`` is not a Python ``int``, so scalars are unwrapped first.
-    """
-    item = getattr(value, "item", None)
-    return item() if callable(item) else value
+    """Local alias kept so this module reads the same as its siblings."""
+    return to_native(value)
 
 
 def validate_record(record: dict[str, object], *, require_target: bool = False) -> None:
@@ -146,6 +143,11 @@ def to_features(cleaned: pd.DataFrame) -> pd.DataFrame:
             for category in field.categories:
                 columns[f"{field.name}={category}"] = (series == category).astype("float64")
         else:
+            if not is_numeric_dtype(series):
+                raise SchemaError(
+                    f"{field.name}: expected an encoded numeric column but found "
+                    f"dtype {series.dtype!r}; pass the output of clean()"
+                )
             columns[field.name] = series.astype("float64")
 
     return pd.DataFrame(columns, index=cleaned.index)[list(FEATURE_ORDER)]

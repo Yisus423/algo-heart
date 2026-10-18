@@ -17,15 +17,30 @@ Numbered requirements. `S#` quote the user's exact words where the user supplied
 - **S7** — Provenance: "estoy leyendo en la descripción de kaggle y dice que es un dataset sintético". The Kaggle author's own subtitle is "9,000 synthetic patients: labs, wearables, lifestyle, 30% prevalence". Every user-facing claim about accuracy must be scoped to the synthetic generator, never to clinical validity.
 - **S8** — Decision recorded this session: the product promise is the **hybrid with a visible confidence band** (user's selected option). A prediction is shown with the count of real versus imputed fields, and the band must visually outweigh the verdict.
 
-## Measured baseline (do not re-derive; evidence in Log L5)
+## Measured baseline
+
+Two real measurements that answer different questions. Both are RandomForest on a stratified 75/25 split with `random_state=42`.
+
+At the default 0.5 cutoff, on the full release, feature-set comparison:
 
 | Feature set | Accuracy | Recall | PR-AUC |
 | --- | --- | --- | --- |
-| 16 kept features (current `heart_clean.csv`) | 87.2% | 71.3% | 0.863 |
+| 16 kept features (old `heart_clean.csv`) | 87.2% | 71.3% | 0.863 |
 | all 26 encoded features | 88.4% | 73.2% | 0.884 |
-| habits only (lay-answerable) | 77.4% | 48.5% | 0.640 |
+| habits only (7 columns a layperson can answer) | 77.4% | 48.5% | 0.640 |
 
-Consequence for S4/S8: habits-only recall is 48.5%, so a verdict from an interview with no measurements would miss roughly half the positives. The app must therefore count real fields and degrade honestly.
+With the threshold chosen for the artifact's recall target, from `artifacts/metrics.json`:
+
+| Model | Design columns | Threshold | Recall | Precision | PR-AUC |
+| --- | --- | --- | --- | --- | --- |
+| full contract | 30 | 0.3367 | 0.852 | 0.734 | 0.887 |
+| interview-answerable fields only | 19 | 0.2267 | 0.853 | 0.518 | 0.745 |
+
+The interview-only model reaches the same recall only by flagging far more healthy people: precision 0.52 against 0.73, and PR-AUC 0.745 against 0.887. The threshold is what closes the recall gap, not new information, and the cost is false alarms. That measured gap is what the confidence band is grounded in, instead of a guess.
+
+ROC-AUC for the shipped model is 0.940. Accuracy is not reported as a headline: 30.3% of rows are positive, so answering "no" unconditionally already scores 69.7%.
+
+Consequence for S4/S8: an interview that never asks for a measurement cannot be presented as a screening result. The app has to count real fields and say what is missing.
 
 ## Algorithmics design tokens (sampled, not guessed)
 
@@ -51,7 +66,7 @@ Heading typeface is a heavy geometric sans (Nunito/Montserrat family). This is a
 | ID | Specs | Task | Route | Commit |
 | --- | --- | --- | --- | --- |
 | T1a | S1, S7 | Verified dataset plus a contract-checked cleaning pipeline: pinned download, `sex` fix, evidence-based feature set, frozen `FEATURE_ORDER` | inline, test-first | `1fa6bee` (data swap), this commit (logic) |
-| T1b | S1, S7, S8 | Frozen artifact: fit, evaluate, serialise model + scaler + schema version, and a serving function that declares its coverage | inline, test-first | pending |
+| T1b | S1, S7, S8 | Frozen artifact: fit, evaluate, serialise model + imputation + threshold + schema version, and a serving function that declares its coverage | inline, test-first | pending |
 | T2 | S2, S5 | Streamlit shell with the Algorithmics tokens in `.streamlit/config.toml` plus minimal CSS | inline | pending |
 | T3 | S2 | Chat UI: `st.chat_message` / `st.chat_input`, session state, message history | inline | pending |
 | T4 | S3, S4 | LLM interview behind a provider interface, strict tool schema, `predict` tool call | inline | pending |
@@ -101,3 +116,9 @@ Aparte tengo un miedo tremendo, imagináte que un proyecto estúpido le diga a a
 **L10 (differential check, this session):** the new pipeline was compared against the base commit's `heart_clean.csv`, regenerated from the base `heart_dataclean.py` in a scratch directory. Of the 16 shared columns, 15 are identical row for row and only `sex` differs, in exactly the 4731 rows the old mapping had zeroed. No unintended behaviour change.
 
 **L11 (slice decision, this session):** the harness flagged the first commit at 19153 authored changed lines, almost all of it the dataset file. The commit was split so the mechanical data swap stands alone; see Delivery slices.
+
+**L12 (bug found by a smoke test, this session):** `python -m heartrisk.train` wrote an artifact that could not be loaded. Running a module with `-m` executes it as `__main__`, so a dataclass defined in `heartrisk/train.py` was pickled as `__main__.Artifact` and `import heartrisk` could never resolve it. Fixed by moving `Artifact` into `heartrisk/artifact.py`, a module that is never `__main__`, and pinned by `test_the_artifact_class_is_importable_and_not_main` plus a subprocess test that runs the real CLI and reloads what it wrote. This would have failed on stage, not in review.
+
+**L13 (measurement, this session):** my own earlier framing was incomplete. The 48.5% figure for habits-only was measured at the default 0.5 cutoff. At a recall-matched threshold the interview-only model reaches 0.853 recall, so "a conversation misses half the cases" was wrong as stated. The real cost is precision: 0.518 against 0.734, with PR-AUC 0.745 against 0.887. The corrected comparison is in Measured baseline.
+
+**L14 (size, this session):** the artifact is a 300-tree forest, about 31 MB uncompressed. `joblib` compression level 3 brings it to 6.2 MB, so it stays out of git and is rebuilt in about 40 seconds.
