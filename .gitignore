@@ -8,3 +8,14 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Derived data and trained artifacts (rebuilt by scripts/fetch_data.py and heartrisk.train)
+data/processed/
+artifacts/
+
+# Tooling
+.pytest_cache/
+.streamlit/secrets.toml
+
+# Local reference screenshots used to sample the design tokens
+examples-style/
