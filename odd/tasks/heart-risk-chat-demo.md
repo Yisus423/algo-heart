@@ -61,6 +61,13 @@ Consequence for S4/S8: an interview that never asks for a measurement cannot be 
 
 Heading typeface is a heavy geometric sans (Nunito/Montserrat family). This is an inference from the screenshots, not a measured value; confirm against the brand manual before shipping.
 
+## Deviations
+
+Recorded explicitly rather than quietly absorbed.
+
+- **S3, who decides the moment to predict.** S3 has the model call a `predict` function "cuando tenga la informacion lista". Here the model calls a tool that *reports what it understood*, and the app decides when to predict, from the coverage gate in `predict.py`. Reason: letting the model decide readiness puts the "is this enough to say something" judgement inside the component that has no knowledge of coverage, recall or the synthetic-data caveat, which is precisely the failure S6 exists to prevent. The user's original wording is preserved in S3; if the model owning that decision matters, this is where to say so.
+- **Heading typeface.** Nunito is inferred from the screenshots. It is marked as an inference in `app.py` and in the README rather than presented as a measured token.
+
 ## Tasks
 
 | ID | Specs | Task | Route | Commit |
@@ -71,8 +78,8 @@ Heading typeface is a heavy geometric sans (Nunito/Montserrat family). This is a
 | T4 | S3, S4 | Gemini interviewer behind the same interface, with the answer extracted through a strict tool call | inline, test-first | this commit |
 | T5 | S8 | Coverage band | dropped: absorbed by T2+T3 | — |
 | T6 | S6 | Emergency routing and the persistent disclaimer | inline, test-first | this commit |
-| T7 | S1, S6 | README and runbook, including what the model is and is not | inline | pending |
-| T8 | all | Verification: focused tests plus a whole-document read against each `S#` | inline | pending |
+| T7 | S1, S6 | README and runbook, including what the model is and is not | inline | this commit |
+| T8 | all | Verification: focused tests plus a whole-document read against each `S#` | inline | this commit |
 
 T5 was planned as a separate task and turned out to be presentation logic that only makes sense next to the chat that produces the payload, so it was folded into T2+T3 rather than left pending.
 
@@ -136,10 +143,25 @@ Aparte tengo un miedo tremendo, imagináte que un proyecto estúpido le diga a a
 
 **L20 (safety false positive, caught by a test, this session):** the first version of the emergency rules listed the bare word "infarto" as acute. That fired on "mi viejo tuvo un infarto a los 55", which is the *answer* to the family-history question: the interview stopped and told the user to call an ambulance. Fixed by splitting the rules in two: only unambiguous acute presentations fire alone, and ambiguous or ordinary terms ("infarto", "arritmia", "taquicardia", "me falta el aire", "convulsiones") need a present-tense marker. Pinned by `test_describing_a_relative_heart_attack_is_not_an_emergency` and at app level by `test_describing_a_relative_who_had_a_heart_attack_is_not_an_emergency`.
 
-**L21 (architecture decision, this session):** in the language-model interviewer the model owns *understanding* and the contract owns the *agenda*. The model reads free text and reports what it understood through the tool call; the next question always comes from `FEATURES` order via `InterviewState.next_field()`. That means the model cannot loop, skip a field, invent a question, or strand the interview. Two fallbacks keep it demo-safe: the first turn is deterministic, so nothing blocks on the network before the user types; and the deterministic parser backs up the field currently being asked. The tool schema is generated from `FIELDS`, so a field can never be askable yet unreportable.
+**L21 (architecture decision, this session):** in the language-model interviewer the model owns *understanding* and the contract owns the *agenda*. The model reads free text and reports what it understood through the tool call; the next question always comes from `FIELDS` order via `InterviewState.next_field()`. That means the model cannot loop, skip a field, invent a question, or strand the interview. Two fallbacks keep it demo-safe: the first turn is deterministic, so nothing blocks on the network before the user types; and the deterministic parser backs up the field currently being asked. The tool schema is generated from `FIELDS`, so a field can never be askable yet unreportable.
 
 **L22 (API verified, not assumed, this session):** the `google-genai` 2.31.0 surface was confirmed by introspection before being used: `genai.Client(api_key=...)`, `client.models.generate_content(model=, contents=, config=...)`, `types.GenerateContentConfig(system_instruction=, tools=, temperature=)`, `types.Tool(function_declarations=)`, `types.FunctionDeclaration(name=, description=, parameters_json_schema=)`, `response.function_calls`, `response.text`.
 
 **L23 (verification boundary, this session):** T4 is not verified against the live API, because `GEMINI_API_KEY` was not provided. The wire path is covered by a `FakeTransport` that exercises extraction, validation, rejection reporting, fallbacks and the emergency short-circuit without a network, and the app falls back to the deterministic interviewer when no key is present. The free tier's data use is disclosed in the UI, since the user chose that provider.
 
 **L24 (test determinism, this session):** the app tests delete `GEMINI_API_KEY` with an autouse fixture, so a machine that happens to export the variable cannot turn the suite into live API calls that spend quota and depend on the network.
+
+**L25 (verification, this session).** Each spec, against evidence:
+
+| Spec | Evidence |
+| --- | --- |
+| S1 | The artifact is a demonstration: the header disclaimer, the README's "Read this first", and the verdict wording all say so. |
+| S2 | `app.py` uses `st.chat_message` / `st.chat_input` with `session_state`; `tests/test_app.py` drives a full conversation through the real script. |
+| S3 | Implemented with the documented deviation in Deviations: Gemini understands the answers, the contract owns the agenda, the tool schema is generated from `FIELDS`. Not verified against the live API, see L23. |
+| S4 | The interview asks all 25 fields, phrases the 11 measurement ones with `needs_es`, and the band reports what is still missing. `test_the_band_names_what_the_user_could_go_and_get_measured`. |
+| S5 | Tokens sampled from the screenshots with PIL, in `.streamlit/config.toml` and named in `app.py`. |
+| S6 | Permanent disclaimer (`test_the_synthetic_data_disclaimer_is_visible`), verdict that never claims a diagnosis (`test_the_verdict_never_claims_a_diagnosis`), emergency routing (`tests/test_safety.py`, plus the app-level emergency tests), and the coverage gate below which no verdict exists. |
+| S7 | The disclaimer and the README both name the synthetic provenance. |
+| S8 | `render_band` puts coverage and confidence first and full width; the verdict is a caption after a divider. `test_stopping_early_shows_the_band_and_refuses_a_verdict`, `test_a_complete_interview_reaches_full_coverage_and_a_verdict`. |
+
+Checks actually run: 162 tests in the working tree; the documented quick start on a **clean clone** (fetch verifies the committed CSV, train writes the artifact, 162 tests pass); `streamlit run app.py` served HTTP 200 on `/healthz` in both the working tree and the clone; and the differential check in L10. Not run: a live Gemini call, because no `GEMINI_API_KEY` was provided.
