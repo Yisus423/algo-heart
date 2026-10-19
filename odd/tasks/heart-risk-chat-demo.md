@@ -78,8 +78,10 @@ Recorded explicitly rather than quietly absorbed.
 | T4 | S3, S4 | Gemini interviewer behind the same interface, with the answer extracted through a strict tool call | inline, test-first | this commit |
 | T5 | S8 | Coverage band | dropped: absorbed by T2+T3 | — |
 | T6 | S6 | Emergency routing and the persistent disclaimer | inline, test-first | this commit |
-| T7 | S1, S6 | README and runbook, including what the model is and is not | inline | this commit |
-| T8 | all | Verification: focused tests plus a whole-document read against each `S#` | inline | this commit |
+| T7 | S1, S6 | README and runbook, including what the model is and is not | inline | `1c2b3c8` |
+| T8 | all | Writer verification: focused tests plus a whole-document read against each `S#` | inline | `1c2b3c8` |
+| T9 | S3 | Live Gemini call, to replace the `FakeTransport` evidence with a real one | blocked: no `GEMINI_API_KEY` was provided | — |
+| T10 | all | Independent verification required by the escalated plan | blocked: no subagent runtime available, see L26 | — |
 
 T5 was planned as a separate task and turned out to be presentation logic that only makes sense next to the chat that produces the payload, so it was folded into T2+T3 rather than left pending.
 
@@ -165,3 +167,7 @@ Aparte tengo un miedo tremendo, imagináte que un proyecto estúpido le diga a a
 | S8 | `render_band` puts coverage and confidence first and full width; the verdict is a caption after a divider. `test_stopping_early_shows_the_band_and_refuses_a_verdict`, `test_a_complete_interview_reaches_full_coverage_and_a_verdict`. |
 
 Checks actually run: 162 tests in the working tree; the documented quick start on a **clean clone** (fetch verifies the committed CSV, train writes the artifact, 162 tests pass); `streamlit run app.py` served HTTP 200 on `/healthz` in both the working tree and the clone; and the differential check in L10. Not run: a live Gemini call, because no `GEMINI_API_KEY` was provided.
+
+**L26 (independent verification unavailable, this session):** the escalated plan required an independent verifier, so `gentle-ai-verify` was launched. It timed out with the identical symptom as the earlier writer: no first run event for `nvidia/deepseek-ai/deepseek-v4.1-flash` after four minutes. Two different agents, the same model, the same stall pattern, so subagent execution is unavailable in this environment rather than the task being wrong. It is reported as unavailable and was not retried or replaced with ceremony. **The independent verification therefore remains open, and the writer self-verification stands alone.**
+
+The writer's own verification of the claim most likely to be self-deceived — that no user-facing string asserts a heart condition — was done mechanically rather than by re-reading my own prose. Every string literal in `app.py`, `heartrisk/llm.py`, `heartrisk/interview.py`, `heartrisk/safety.py` and `heartrisk/predict.py` was extracted with `ast` (121 strings) and searched for condition-asserting cues. Seven hits, all benign on inspection: the disclaimer's "si tenés síntomas o dudas sobre tu salud, consultá a un médico" points at a doctor rather than at a condition, "si los tenés" refers to numbers, and the system prompt contains its own prohibition ("NUNCA digas que la persona puede tener una enfermedad"). That is evidence, not proof: an independent reader could still find an implication I cannot see in my own text.
