@@ -68,9 +68,9 @@ Heading typeface is a heavy geometric sans (Nunito/Montserrat family). This is a
 | T1a | S1, S7 | Verified dataset plus a contract-checked cleaning pipeline: pinned download, `sex` fix, evidence-based feature set, frozen `FEATURE_ORDER` | inline, test-first | `1fa6bee` (data swap), `49c5985` (logic) |
 | T1b | S1, S7, S8 | Frozen artifact: fit, evaluate, serialise model + imputation + threshold + schema version, and a serving function that declares its coverage | inline, test-first | `115b2a5` |
 | T2+T3 | S2, S5, S8 | Streamlit shell with the Algorithmics tokens, chat UI with session state, the coverage band, and a deterministic stub interviewer behind the interface a language model will implement | inline; the delegate was unavailable | this commit |
-| T4 | S3, S4 | Gemini interviewer behind the same interface, with the answer extracted through a strict tool call | inline, test-first | pending |
+| T4 | S3, S4 | Gemini interviewer behind the same interface, with the answer extracted through a strict tool call | inline, test-first | this commit |
 | T5 | S8 | Coverage band | dropped: absorbed by T2+T3 | — |
-| T6 | S6 | Emergency routing and the persistent disclaimer | inline, test-first | pending |
+| T6 | S6 | Emergency routing and the persistent disclaimer | inline, test-first | this commit |
 | T7 | S1, S6 | README and runbook, including what the model is and is not | inline | pending |
 | T8 | all | Verification: focused tests plus a whole-document read against each `S#` | inline | pending |
 
@@ -133,3 +133,13 @@ Aparte tengo un miedo tremendo, imagináte que un proyecto estúpido le diga a a
 **L18 (app verification, this session):** the app is verified by `streamlit.testing.v1.AppTest`, which executes the real script headlessly: the app starts without raising, answering advances the conversation, an unusable answer is re-asked rather than stored, stopping early shows the band with no verdict, a complete 25-turn interview reaches 25/25 at high confidence with a verdict, the verdict never claims a diagnosis, and the interview restarts. A real server start was also checked (`streamlit run app.py` served HTTP 200 on both `/healthz` and `/`).
 
 **L19 (scope boundary, this session):** ambient requests to expose the model under a real product surface stay out of scope. The app is a demo for one classroom presentation, not a clinical tool, and S6 is the reason.
+
+**L20 (safety false positive, caught by a test, this session):** the first version of the emergency rules listed the bare word "infarto" as acute. That fired on "mi viejo tuvo un infarto a los 55", which is the *answer* to the family-history question: the interview stopped and told the user to call an ambulance. Fixed by splitting the rules in two: only unambiguous acute presentations fire alone, and ambiguous or ordinary terms ("infarto", "arritmia", "taquicardia", "me falta el aire", "convulsiones") need a present-tense marker. Pinned by `test_describing_a_relative_heart_attack_is_not_an_emergency` and at app level by `test_describing_a_relative_who_had_a_heart_attack_is_not_an_emergency`.
+
+**L21 (architecture decision, this session):** in the language-model interviewer the model owns *understanding* and the contract owns the *agenda*. The model reads free text and reports what it understood through the tool call; the next question always comes from `FEATURES` order via `InterviewState.next_field()`. That means the model cannot loop, skip a field, invent a question, or strand the interview. Two fallbacks keep it demo-safe: the first turn is deterministic, so nothing blocks on the network before the user types; and the deterministic parser backs up the field currently being asked. The tool schema is generated from `FIELDS`, so a field can never be askable yet unreportable.
+
+**L22 (API verified, not assumed, this session):** the `google-genai` 2.31.0 surface was confirmed by introspection before being used: `genai.Client(api_key=...)`, `client.models.generate_content(model=, contents=, config=...)`, `types.GenerateContentConfig(system_instruction=, tools=, temperature=)`, `types.Tool(function_declarations=)`, `types.FunctionDeclaration(name=, description=, parameters_json_schema=)`, `response.function_calls`, `response.text`.
+
+**L23 (verification boundary, this session):** T4 is not verified against the live API, because `GEMINI_API_KEY` was not provided. The wire path is covered by a `FakeTransport` that exercises extraction, validation, rejection reporting, fallbacks and the emergency short-circuit without a network, and the app falls back to the deterministic interviewer when no key is present. The free tier's data use is disclosed in the UI, since the user chose that provider.
+
+**L24 (test determinism, this session):** the app tests delete `GEMINI_API_KEY` with an autouse fixture, so a machine that happens to export the variable cannot turn the suite into live API calls that spend quota and depend on the network.

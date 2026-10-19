@@ -21,8 +21,10 @@ from collections import defaultdict
 import streamlit as st
 
 from heartrisk.artifact import Artifact, load_artifact
-from heartrisk.interview import InterviewState, StubInterviewer, Turn
+from heartrisk.interview import InterviewState, Interviewer, Turn, question_for
+from heartrisk.llm import API_KEY_ENV, GeminiInterviewer, build_interviewer
 from heartrisk.predict import Confidence, Prediction, predict
+from heartrisk.safety import EMERGENCY_MESSAGE
 from heartrisk.schema import FIELDS_BY_NAME
 
 # Design tokens sampled from the course page that [theme] cannot express.
@@ -77,6 +79,14 @@ CONFIDENCE_NOTE = {
 }
 
 
+#: Shown in the conversation where it happened, while the full message goes to
+#: the banner at the top of the screen.
+EMERGENCY_CHAT_LINE = (
+    "**Pará un segundo.** Te dejo las indicaciones arriba, en rojo. "
+    "Lo que me contaste no es algo que este demo pueda evaluar."
+)
+
+
 @st.cache_resource(show_spinner=False)
 def cached_artifact() -> Artifact:
     """Load the frozen artifact once per session."""
@@ -96,17 +106,25 @@ def load_model() -> Artifact | None:
         return None
 
 
-def interviewer() -> StubInterviewer:
-    return StubInterviewer()
+def interviewer() -> Interviewer:
+    """This session's interviewer.
+
+    It lives in ``session_state`` because the language-model implementation keeps
+    the conversation transcript on the instance; recreating it on every rerun
+    would make it forget what the user already said.
+    """
+    return st.session_state.interviewer
 
 
 def start_interview() -> None:
     """Reset the conversation and speak first."""
     state = InterviewState()
+    st.session_state.interviewer = build_interviewer()
     turn = interviewer().opening()
     st.session_state.messages = [("assistant", line) for line in turn.messages]
     st.session_state.interview = state
     st.session_state.result = None
+    st.session_state.emergency = False
     apply_turn(turn)
 
 
@@ -117,6 +135,13 @@ def apply_turn(turn: Turn) -> None:
     takes no state. Re-stating it here keeps both paths identical and makes the
     caller the single place that moves the conversation forward.
     """
+    if turn.emergency:
+        # The pending question is deliberately left pending, so the interview can
+        # resume once the person has been told to get help.
+        st.session_state.messages.append(("assistant", EMERGENCY_CHAT_LINE))
+        st.session_state.emergency = True
+        return
+
     st.session_state.messages.extend(("assistant", line) for line in turn.messages)
     if turn.asking is not None:
         st.session_state.interview.pending = turn.asking
@@ -219,6 +244,12 @@ def render_verdict(result: Prediction) -> None:
         )
 
 
+def engine_label(active: Interviewer) -> str:
+    if isinstance(active, GeminiInterviewer):
+        return "Gemini (entiende respuestas en lenguaje natural)"
+    return f"determinista (sin {API_KEY_ENV})"
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Riesgo cardíaco — demo académico",
@@ -240,6 +271,18 @@ def main() -> None:
     if "messages" not in st.session_state:
         start_interview()
 
+    if isinstance(interviewer(), GeminiInterviewer):
+        st.info(
+            "Para interpretar tus respuestas, este demo manda el texto a Google "
+            "(plan gratuito), que puede usarlo para mejorar sus modelos. Es un "
+            "demo: no escribas datos reales de salud.",
+            icon="🔒",
+        )
+    st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
+
+    if st.session_state.get("emergency"):
+        st.error(EMERGENCY_MESSAGE, icon="🚑")
+
     result: Prediction | None = st.session_state.result
     if result is not None:
         render_band(result)
@@ -249,6 +292,17 @@ def main() -> None:
     for role, text in st.session_state.messages:
         with st.chat_message(role):
             st.markdown(text)
+
+    if st.session_state.get("emergency"):
+        if st.button("Seguir con la entrevista", type="primary"):
+            st.session_state.emergency = False
+            pending = st.session_state.interview.pending
+            follow_up = (
+                question_for(FIELDS_BY_NAME[pending]) if pending else "Seguimos."
+            )
+            st.session_state.messages.append(("assistant", f"Listo. {follow_up}"))
+            st.rerun()
+        return
 
     if st.session_state.interview.finished:
         st.success("La entrevista terminó.", icon="✅")

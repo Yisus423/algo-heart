@@ -33,6 +33,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from .safety import EMERGENCY_MESSAGE, detect_emergency
 from .schema import (
     ASKABLE_FIELDS,
     FIELDS,
@@ -42,6 +43,7 @@ from .schema import (
     derive_bmi,
     validate_value,
 )
+from .text import normalise, parse_number, parse_numbers, tokens_of
 
 #: Answers that mean "leave this field out" rather than a value.
 SKIP_TOKENS: tuple[str, ...] = (
@@ -110,10 +112,6 @@ _NEGATIVE_CUES: dict[str, tuple[str, ...]] = {
     "wearable_owner": ("no", "nunca", "ninguno", "n"),
 }
 
-#: A number is only a number when a letter does not introduce it. Without this,
-#: "mi hba1c es 5,4" yields the 1 inside "hba1c".
-_NUMBER = re.compile(r"(?<![A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1])-?\d+(?:[.,]\d+)*")
-
 #: Question order: everything a person can answer from memory first, then the
 #: fields that only exist after a measurement. A user who quits early therefore
 #: still clears the coverage floor with real answers.
@@ -168,6 +166,8 @@ class Turn:
     messages: tuple[str, ...]
     asking: str | None = None
     complete: bool = False
+    #: The interview stopped because the text described an acute event.
+    emergency: bool = False
 
 
 @runtime_checkable
@@ -186,41 +186,38 @@ class Interviewer(Protocol):
 # --- parsing ----------------------------------------------------------------
 
 
-def normalise(text: str) -> str:
-    """Lowercase, strip accents and collapse whitespace for keyword matching."""
-    folded = (
-        text.lower()
-        .replace("á", "a")
-        .replace("é", "e")
-        .replace("í", "i")
-        .replace("ó", "o")
-        .replace("ú", "u")
-        .replace("ü", "u")
-    )
-    return " ".join(folded.split())
-
-
 def is_skip(text: str) -> bool:
+    """A whole word matches exactly; only a multi-word phrase matches inside.
+
+    Substring matching on single words is how the answer parser once read every
+    woman as male (the cue "m" matched inside "mujer"). Skip detection gets the
+    same treatment, because a false skip loses a field in silence.
+    """
     folded = normalise(text)
-    return any(token in folded for token in SKIP_TOKENS)
+    tokens = tokens_of(text)
+    return any(
+        token in folded if " " in token else token in tokens for token in SKIP_TOKENS
+    )
 
 
 def is_done(text: str) -> bool:
     folded = normalise(text)
-    return any(token in folded for token in DONE_TOKENS)
+    tokens = tokens_of(text)
+    return any(
+        token in folded if " " in token else token in tokens for token in DONE_TOKENS
+    )
 
 
-def parse_number(text: str) -> float | None:
-    """Read the first number in Spanish formatting, or ``None``."""
-    match = _NUMBER.search(text)
-    if match is None:
+def emergency_turn(text: str) -> Turn | None:
+    """Return a Turn that stops the interview, when the text describes an acute event.
+
+    Shared by every interviewer implementation, so the safety check cannot be
+    forgotten by the language-model one.
+    """
+    reason = detect_emergency(text)
+    if reason is None:
         return None
-    raw = match.group(0)
-    if "," in raw and "." not in raw:
-        head, _, tail = raw.rpartition(",")
-        # "10,000" is a thousands separator; "5,4" is a decimal comma.
-        raw = head.replace(",", "") + tail if len(tail) == 3 else f"{head}.{tail}"
-    return float(raw.replace(",", ""))
+    return Turn(messages=(EMERGENCY_MESSAGE,), emergency=True)
 
 
 def _cue_matches(cue: str, folded: str, tokens: set[str]) -> bool:
@@ -232,7 +229,7 @@ def _cue_matches(cue: str, folded: str, tokens: set[str]) -> bool:
 
 def parse_boolean(field: Field, text: str) -> bool | None:
     folded = normalise(text)
-    tokens = set(folded.split())
+    tokens = tokens_of(text)
 
     negative = _NEGATIVE_CUES.get(field.name)
     if negative is not None:
@@ -249,7 +246,7 @@ def parse_boolean(field: Field, text: str) -> bool | None:
 
 def parse_category(field: Field, text: str) -> str | None:
     folded = normalise(text)
-    tokens = set(folded.split())
+    tokens = tokens_of(text)
 
     for category in field.categories:
         if normalise(category) in folded:
@@ -267,7 +264,7 @@ def parse_computed(field: Field, text: str) -> float | None:
     Every number in one message is read positionally, matching the question's
     own wording ("how much do you weigh and how tall are you").
     """
-    numbers = [float(m.group(0).replace(",", ".")) for m in _NUMBER.finditer(text)]
+    numbers = parse_numbers(text)
     if len(numbers) < len(field.computed_from):
         return None
     weight, height = numbers[0], numbers[1]
@@ -338,6 +335,11 @@ class StubInterviewer:
         )
 
     def respond(self, text: str, state: InterviewState) -> Turn:
+        emergency = emergency_turn(text)
+        if emergency is not None:
+            # The pending field is left in place so the interview can resume.
+            return emergency
+
         pending = FIELDS_BY_NAME.get(state.pending) if state.pending else None
 
         if is_done(text):

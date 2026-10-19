@@ -5,6 +5,7 @@ description = "Heart risk demo: interview-style Streamlit app over a synthetic r
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "google-genai>=2.31.0",
     "pandas>=3.0.6",
     "scikit-learn>=1.9.1",
     "streamlit>=1.66.0",

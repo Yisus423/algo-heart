@@ -63,6 +63,17 @@ ANSWERS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def deterministic_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the app tests off the network and off the free tier.
+
+    ``build_interviewer`` prefers Gemini whenever the key is set, so without this
+    the suite would call a real API from a machine that happens to export the
+    variable, and would spend quota to test the app shell.
+    """
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+
 def start() -> AppTest:
     app = AppTest.from_file(APP_PATH, default_timeout=120)
     app.run()
@@ -208,3 +219,64 @@ def test_the_interview_can_be_restarted() -> None:
     assert not app.exception
     assert "¿Cuántos años tenés?" in visible_text(app)
     assert not app.metric
+
+
+# --- emergencies, spec S6 ---------------------------------------------------
+
+
+def test_an_acute_symptom_stops_the_interview_and_gives_emergency_numbers() -> None:
+    app = start()
+
+    say(app, "me duele el pecho ahora")
+
+    assert not app.exception
+    banner = " ".join(element.value for element in app.error)
+    assert "107" in banner
+    assert "911" in banner
+    assert "no es un servicio médico" in banner
+
+
+def test_the_interview_cannot_continue_by_typing_while_an_emergency_is_open() -> None:
+    app = start()
+
+    say(app, "me duele el pecho ahora")
+
+    assert not app.chat_input, "the person should not keep typing symptoms into a demo"
+    assert any("Seguir con la entrevista" == b.label for b in app.button)
+
+
+def test_the_interview_resumes_with_the_same_question_after_an_emergency() -> None:
+    app = start()
+    say(app, "me duele el pecho ahora")
+
+    next(b for b in app.button if b.label == "Seguir con la entrevista").click().run()
+
+    assert not app.exception
+    assert app.chat_input, "the interview should be running again"
+    resumed = [m.value for m in app.markdown if m.value.startswith("Listo.")]
+    assert resumed, "resuming should say something"
+    assert "¿Cuántos años tenés?" in resumed[-1], "and re-ask the pending question"
+
+
+def test_describing_a_relative_who_had_a_heart_attack_is_not_an_emergency() -> None:
+    """This is the answer to the family-history question, not a symptom."""
+    app = start()
+    say(app, "54")
+    say(app, "Male")
+    say(app, "95 kg y 172 cm")
+    say(app, "nunca siento dolor")
+    say(app, "no")
+
+    say(app, "mi viejo tuvo un infarto a los 55")
+
+    assert not app.exception
+    assert not app.session_state.get("emergency")
+    assert "107" not in visible_text(app)
+
+
+def test_the_engine_is_named_on_screen() -> None:
+    app = start()
+    say(app, "54")
+    say(app, "listo")
+
+    assert "Motor de entrevista: determinista" in visible_text(app)
