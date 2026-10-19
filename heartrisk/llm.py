@@ -56,6 +56,11 @@ from .schema import (
 DEFAULT_MODEL = "gemini-2.5-flash"
 API_KEY_ENV = "GEMINI_API_KEY"
 
+#: Accepted spellings, looked up in order. Streamlit's own documentation uses the
+#: upper-case form; Python developers tend to write the lower-case one.
+API_KEY_NAMES: tuple[str, ...] = ("GEMINI_API_KEY", "gemini_api_key")
+MODEL_NAMES: tuple[str, ...] = ("GEMINI_MODEL", "gemini_model")
+
 TOOL_NAME = "registrar_datos"
 TOOL_DESCRIPTION = (
     "Registra los datos que la persona mencionó en su mensaje, aunque los haya "
@@ -293,24 +298,62 @@ class GeminiInterviewer:
         return rejected
 
 
-def build_interviewer(api_key: str | None = None, model: str = DEFAULT_MODEL) -> Interviewer:
+def _lookup(sources: list[object], names: tuple[str, ...]) -> str | None:
+    """First non-blank string found under any of ``names``, in source order."""
+    for source in sources:
+        if not source:
+            continue
+        for name in names:
+            value = source.get(name)  # type: ignore[union-attr]
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def resolve_api_key(
+    secrets: object | None = None, env: object | None = None
+) -> str | None:
+    """Return the API key, preferring the deployment's secrets over the environment.
+
+    Secrets come first because the deployment owns this credential: a visitor
+    brings nothing of their own, and a stray local ``export`` must not silently
+    override what the deployed app was configured with.
+    """
+    return _lookup([secrets, os.environ if env is None else env], API_KEY_NAMES)
+
+
+def resolve_model(
+    secrets: object | None = None, env: object | None = None, default: str = DEFAULT_MODEL
+) -> str:
+    """Return the configured model name, falling back to ``default``."""
+    return _lookup([secrets, os.environ if env is None else env], MODEL_NAMES) or default
+
+
+def build_interviewer(
+    api_key: str | None = None, model: str | None = None, secrets: object | None = None
+) -> Interviewer:
     """Use Gemini when a key is available, otherwise the deterministic stub.
 
     Never raises: an app that cannot reach a language model must still run, and
-    the deterministic interviewer collects the same contract fields.
+    the deterministic interviewer collects the same contract fields. The caller
+    decides how loudly to say that the model is absent.
     """
-    key = api_key or os.environ.get(API_KEY_ENV)
+    key = api_key or resolve_api_key(secrets)
     if not key:
         return StubInterviewer()
     try:
-        return GeminiInterviewer(GeminiTransport(model=model, api_key=key))
+        return GeminiInterviewer(
+            GeminiTransport(model=model or resolve_model(secrets), api_key=key)
+        )
     except RuntimeError:
         return StubInterviewer()
 
 
 __all__ = [
     "API_KEY_ENV",
+    "API_KEY_NAMES",
     "DEFAULT_MODEL",
+    "MODEL_NAMES",
     "GeminiInterviewer",
     "GeminiTransport",
     "Interviewer",
@@ -320,4 +363,6 @@ __all__ = [
     "build_answer_tool",
     "build_interviewer",
     "field_schema",
+    "resolve_api_key",
+    "resolve_model",
 ]

@@ -116,10 +116,29 @@ def interviewer() -> Interviewer:
     return st.session_state.interviewer
 
 
+def secret_map() -> dict[str, object]:
+    """Read Streamlit secrets as a plain mapping.
+
+    Streamlit raises ``StreamlitSecretNotFoundError``, which subclasses
+    ``FileNotFoundError``, when the deployment has no secrets file. That is a
+    configuration state rather than a crash, and ``main`` decides how loudly to
+    report it. Any other error is left to surface: this app does not want to
+    swallow a real configuration fault.
+    """
+    try:
+        return dict(st.secrets.items())
+    except FileNotFoundError:
+        return {}
+
+
 def start_interview() -> None:
-    """Reset the conversation and speak first."""
+    """Reset the conversation and speak first.
+
+    The interviewer is built from the deployment's secrets, so a visitor brings no
+    credential of their own.
+    """
     state = InterviewState()
-    st.session_state.interviewer = build_interviewer()
+    st.session_state.interviewer = build_interviewer(secrets=secret_map())
     turn = interviewer().opening()
     st.session_state.messages = [("assistant", line) for line in turn.messages]
     st.session_state.interview = state
@@ -277,6 +296,17 @@ def main() -> None:
             "(plan gratuito), que puede usarlo para mejorar sus modelos. Es un "
             "demo: no escribas datos reales de salud.",
             icon="🔒",
+        )
+    else:
+        # A missing key is a loud state, not a silent downgrade: the demo still
+        # runs, and whoever deployed it needs to know it is running degraded.
+        st.warning(
+            "**Falta la API key de Gemini.** La app está corriendo con el "
+            "entrevistador determinista, que entiende mucho menos. Quien despliega "
+            f"esto configura el secreto `{API_KEY_ENV}` en "
+            "`.streamlit/secrets.toml` o en la sección de secretos del hosting. "
+            "**Los visitantes no necesitan aportar ninguna key.**",
+            icon="🔑",
         )
     st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
 

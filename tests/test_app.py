@@ -281,3 +281,35 @@ def test_the_engine_is_named_on_screen() -> None:
     say(app, "listo")
 
     assert "Motor de entrevista: determinista" in visible_text(app)
+
+
+# --- the credential, spec S10 -----------------------------------------------
+
+
+def test_without_a_key_the_app_says_so_instead_of_downgrading_silently() -> None:
+    app = start()
+
+    warnings = " ".join(element.value for element in app.warning)
+
+    assert "Falta la API key" in warnings
+    assert "GEMINI_API_KEY" in warnings
+    assert "visitantes no necesitan" in warnings
+
+
+def test_the_demo_still_runs_when_no_key_is_configured() -> None:
+    """A missing credential degrades the engine, it does not break the demo."""
+    app = start()
+
+    assert not app.exception
+    assert "¿Cuántos años tienes?" in visible_text(app)
+
+
+def test_a_configured_key_removes_the_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No message is sent, so nothing reaches the network; only the wiring is read."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-never-used")
+
+    app = start()
+
+    assert not app.exception
+    assert "Falta la API key" not in " ".join(e.value for e in app.warning)
+    assert "Gemini" in visible_text(app)

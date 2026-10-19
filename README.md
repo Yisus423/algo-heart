@@ -30,15 +30,25 @@ python -m heartrisk.train                # writes artifacts/model.joblib (~40s)
 streamlit run app.py
 ```
 
-No API key is needed. Without one the interview runs on a deterministic engine;
-with `GEMINI_API_KEY` set it runs on Gemini instead, which understands loosely
-phrased answers ("fumo desde los 20", "camino poquísimo") that the deterministic
-parser would miss.
+The app runs with no key at all: the deterministic engine asks the same
+questions, validates the same answers, and computes the same result. It only
+understands loosely phrased replies less well. To enable Gemini — which does
+understand "fumo desde los 20" or "camino poquísimo" — the **deployment**
+supplies the key once, and visitors need nothing of their own:
 
 ```bash
-export GEMINI_API_KEY=...   # optional; free tier. The app discloses that Google
-                            # receives the text, because it does.
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# then put your key in it
 ```
+
+The key is read from Streamlit secrets first and from `GEMINI_API_KEY` in the
+environment second, so what the deployed app was configured with cannot be
+overridden by a stray local `export`. `.streamlit/secrets.toml` is gitignored.
+If no key is present, the app says so in a visible warning rather than quietly
+downgrading to the weaker engine.
+
+The free tier is what this demo targets, and the app discloses on screen that
+Google receives the text, because it does.
 
 ## Measured performance
 

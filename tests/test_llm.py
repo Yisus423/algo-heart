@@ -12,11 +12,14 @@ import pytest
 
 from heartrisk.interview import InterviewState, Turn
 from heartrisk.llm import (
+    DEFAULT_MODEL,
     GeminiInterviewer,
     ModelReply,
     build_answer_tool,
     build_interviewer,
     field_schema,
+    resolve_api_key,
+    resolve_model,
 )
 from heartrisk.schema import FIELDS, FIELDS_BY_NAME, TARGET
 
@@ -280,5 +283,47 @@ def test_a_key_that_cannot_build_a_client_still_yields_a_working_interviewer(
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
 
     interviewer = build_interviewer()
+
+    assert type(interviewer).__name__ == "GeminiInterviewer"
+
+
+# --- where the credential comes from ---------------------------------------
+
+
+def test_secrets_win_over_the_environment() -> None:
+    """The deployment's configuration must not be overridden by a local export."""
+    resolved = resolve_api_key(
+        {"GEMINI_API_KEY": "from-secrets"}, {"GEMINI_API_KEY": "from-env"}
+    )
+
+    assert resolved == "from-secrets"
+
+
+def test_the_environment_is_used_when_secrets_declare_nothing() -> None:
+    assert resolve_api_key({}, {"GEMINI_API_KEY": "from-env"}) == "from-env"
+
+
+def test_both_spellings_of_the_key_are_accepted() -> None:
+    assert resolve_api_key({"GEMINI_API_KEY": "upper"}) == "upper"
+    assert resolve_api_key({"gemini_api_key": "lower"}) == "lower"
+
+
+def test_an_absent_or_blank_key_resolves_to_none() -> None:
+    assert resolve_api_key({}, {}) is None
+    assert resolve_api_key({"GEMINI_API_KEY": "   "}, {}) is None
+    assert resolve_api_key(None, {}) is None
+
+
+def test_the_model_name_can_come_from_secrets() -> None:
+    assert resolve_model({"GEMINI_MODEL": "some-model"}) == "some-model"
+
+
+def test_the_model_falls_back_to_the_default() -> None:
+    assert resolve_model({}, {}) == DEFAULT_MODEL
+
+
+def test_a_visitor_brings_no_credential_of_their_own() -> None:
+    """The seam that matters: the deployment supplies the key, the app reads it."""
+    interviewer = build_interviewer(secrets={"GEMINI_API_KEY": "deployment-key"})
 
     assert type(interviewer).__name__ == "GeminiInterviewer"

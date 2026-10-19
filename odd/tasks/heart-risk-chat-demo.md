@@ -85,8 +85,8 @@ Recorded explicitly rather than quietly absorbed.
 | T8 | all | Writer verification: focused tests plus a whole-document read against each `S#` | inline | `1c2b3c8` |
 | T9 | S3 | Live Gemini call, to replace the `FakeTransport` evidence with a real one | blocked: no `GEMINI_API_KEY` was provided | — |
 | T10 | all | Independent verification required by the escalated plan | blocked: no subagent runtime available, see L26 | — |
-| T11 | S9 | Neutral Spanish across every user-facing string, including the interviewer's questions, the safety message and the model's system prompt | inline, test-first | pending |
-| T12 | S10 | The key comes from Streamlit secrets so a visitor brings none, and a missing key is loud rather than a silent downgrade | inline, test-first | pending |
+| T11 | S9 | Neutral Spanish across every user-facing string, including the interviewer's questions, the safety message and the model's system prompt | inline, test-first | `cabe47d` |
+| T12 | S10 | The key comes from Streamlit secrets so a visitor brings none, and a missing key is loud rather than a silent downgrade | inline, test-first | this commit |
 | T13 | S11 | Visual redesign pass: layout, spacing and the design errors the user flagged | pending, deliberately last per the user | — |
 
 T5 was planned as a separate task and turned out to be presentation logic that only makes sense next to the chat that produces the payload, so it was folded into T2+T3 rather than left pending.
@@ -185,3 +185,5 @@ The writer's own verification of the claim most likely to be self-deceived - tha
 **L29 (requirement change, this session):** L27 and L28 add S9, S10 and S11 and reopen nothing else. S9 corrects my own convention decision in L7: I had written the UI copy in the persona's Rioplatense Spanish for a Venezuelan audience, which is a product defect and not a stylistic preference. S10 changes where the credential comes from and how its absence behaves. S11 is deferred to last by the user's own instruction.
 
 **L30 (open question, this session):** the previous safety message named "107 en CABA" and "911 en el resto del país", which is an Argentina-only split. S9 requires a neutral form; the replacement says "en Venezuela, 911", and that number needs the user's confirmation rather than my assumption, because a wrong emergency number is the one string in this codebase that must not be wrong.
+
+**L31 (T11 and T12 delivered, this session):** T11 removed the voseo from every user-facing string and added `tests/test_copy.py`, which extracts those strings with `ast` and fails on any voseo form or regional word. Writing that check exposed a bug in the check itself: voseo and the neutral second person differ only by the accent ("pesás" from "pesas", "hacés" from "haces"), so a character class like `pes[aá]s` flagged the correct neutral form, and the patterns now spell the accented forms out. T12 moved the credential to Streamlit secrets so the deployment supplies it once and a visitor brings nothing, and made its absence loud instead of a silent downgrade. Input parsing was deliberately left dialect-tolerant: the keyword cues are accent-stripped stems, so a person writing in any register is understood.
