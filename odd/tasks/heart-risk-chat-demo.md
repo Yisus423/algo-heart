@@ -65,15 +65,16 @@ Heading typeface is a heavy geometric sans (Nunito/Montserrat family). This is a
 
 | ID | Specs | Task | Route | Commit |
 | --- | --- | --- | --- | --- |
-| T1a | S1, S7 | Verified dataset plus a contract-checked cleaning pipeline: pinned download, `sex` fix, evidence-based feature set, frozen `FEATURE_ORDER` | inline, test-first | `1fa6bee` (data swap), this commit (logic) |
-| T1b | S1, S7, S8 | Frozen artifact: fit, evaluate, serialise model + imputation + threshold + schema version, and a serving function that declares its coverage | inline, test-first | pending |
-| T2 | S2, S5 | Streamlit shell with the Algorithmics tokens in `.streamlit/config.toml` plus minimal CSS | inline | pending |
-| T3 | S2 | Chat UI: `st.chat_message` / `st.chat_input`, session state, message history | inline | pending |
-| T4 | S3, S4 | LLM interview behind a provider interface, strict tool schema, `predict` tool call | inline | pending |
-| T5 | S4, S8 | Coverage and confidence band: nullable fields, real-vs-imputed count, refusal when coverage is insufficient, user confirmation before predicting | inline | pending |
-| T6 | S6 | Safety guardrails: emergency routing, persistent synthetic-demo disclaimer, no diagnosis wording | inline | pending |
+| T1a | S1, S7 | Verified dataset plus a contract-checked cleaning pipeline: pinned download, `sex` fix, evidence-based feature set, frozen `FEATURE_ORDER` | inline, test-first | `1fa6bee` (data swap), `49c5985` (logic) |
+| T1b | S1, S7, S8 | Frozen artifact: fit, evaluate, serialise model + imputation + threshold + schema version, and a serving function that declares its coverage | inline, test-first | `115b2a5` |
+| T2+T3 | S2, S5, S8 | Streamlit shell with the Algorithmics tokens, chat UI with session state, the coverage band, and a deterministic stub interviewer behind the interface a language model will implement | inline; the delegate was unavailable | this commit |
+| T4 | S3, S4 | Gemini interviewer behind the same interface, with the answer extracted through a strict tool call | inline, test-first | pending |
+| T5 | S8 | Coverage band | dropped: absorbed by T2+T3 | — |
+| T6 | S6 | Emergency routing and the persistent disclaimer | inline, test-first | pending |
 | T7 | S1, S6 | README and runbook, including what the model is and is not | inline | pending |
 | T8 | all | Verification: focused tests plus a whole-document read against each `S#` | inline | pending |
+
+T5 was planned as a separate task and turned out to be presentation logic that only makes sense next to the chat that produces the payload, so it was folded into T2+T3 rather than left pending.
 
 Routing note: T2 depends on T1's artifact, T4 and T5 depend on T2's shell, so these units are not independent and the Writer rule does not fire. All tasks run inline in the parent session.
 
@@ -122,3 +123,13 @@ Aparte tengo un miedo tremendo, imagináte que un proyecto estúpido le diga a a
 **L13 (measurement, this session):** my own earlier framing was incomplete. The 48.5% figure for habits-only was measured at the default 0.5 cutoff. At a recall-matched threshold the interview-only model reaches 0.853 recall, so "a conversation misses half the cases" was wrong as stated. The real cost is precision: 0.518 against 0.734, with PR-AUC 0.745 against 0.887. The corrected comparison is in Measured baseline.
 
 **L14 (size, this session):** the artifact is a 300-tree forest, about 31 MB uncompressed. `joblib` compression level 3 brings it to 6.2 MB, so it stays out of git and is rebuilt in about 40 seconds.
+
+**L15 (delegate unavailable, this session):** T2+T3 was delegated to `gentle-ai-worker` in the background. It timed out after four minutes having emitted no first run event for its model (`nvidia/deepseek-ai/deepseek-v4.1-flash`). Reported as unavailable and done inline. The first launch attempt was also rejected for a malformed `## Allowed edit surfaces` block, which the writer validates strictly: one narrow path or glob per line, with no prose in that section.
+
+**L16 (decisions, this session):** provider for T4 is Gemini on the free tier via `google-genai`, which requires `GEMINI_API_KEY`. Strictness stays as specified: a strong permanent disclaimer, and the coverage floor stays at 0.5, so a complete interview earns a verdict only at the lowest confidence level.
+
+**L17 (two parser bugs found by their own tests, this session):** the answer parser had bugs that the tests caught immediately and that would have produced wrong data silently. (1) The number regex matched digits inside words, so "mi hba1c es 5,4" parsed as 1.0 from the `1` in `hba1c`. (2) Single-word synonyms matched as substrings, so the `"m"` cue matched inside `"mujer"` and every woman was recorded as male. Both are now pinned by tests. The lesson worth keeping: a cue that matches a substring of another word is a data-corruption bug, not a parsing annoyance.
+
+**L18 (app verification, this session):** the app is verified by `streamlit.testing.v1.AppTest`, which executes the real script headlessly: the app starts without raising, answering advances the conversation, an unusable answer is re-asked rather than stored, stopping early shows the band with no verdict, a complete 25-turn interview reaches 25/25 at high confidence with a verdict, the verdict never claims a diagnosis, and the interview restarts. A real server start was also checked (`streamlit run app.py` served HTTP 200 on both `/healthz` and `/`).
+
+**L19 (scope boundary, this session):** ambient requests to expose the model under a real product surface stay out of scope. The app is a demo for one classroom presentation, not a clinical tool, and S6 is the reason.

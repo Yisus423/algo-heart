@@ -1,0 +1,210 @@
+"""App-level checks.
+
+``AppTest`` executes the real Streamlit script headlessly, so these are the tests
+that would catch an app that raises on startup, loses the conversation between
+turns, or renders a verdict it is not allowed to give.
+
+They need the frozen artifact, which is not committed because it is a build
+output. Run ``python -m heartrisk.train`` once and they run; otherwise they skip
+with that instruction.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from streamlit.testing.v1 import AppTest
+
+from heartrisk.artifact import ARTIFACT_PATH
+from heartrisk.schema import ASKABLE_FIELDS, FIELDS
+
+APP_PATH = str(Path(__file__).resolve().parents[1] / "app.py")
+
+pytestmark = pytest.mark.skipif(
+    not ARTIFACT_PATH.exists(),
+    reason="run `python -m heartrisk.train` once; artifacts/ is not committed",
+)
+
+#: The order the stub interviewer asks in: everything answerable from memory
+#: first, then the fields that only exist after a measurement.
+QUESTION_ORDER = [f.name for f in FIELDS if f.name in set(ASKABLE_FIELDS)] + [
+    f.name for f in FIELDS if f.name not in set(ASKABLE_FIELDS)
+]
+
+#: A complete, plausible answer set. A high-risk profile on purpose, so the
+#: happy path exercises a positive verdict rather than the empty case.
+ANSWERS = {
+    "age": "62",
+    "sex": "Male",
+    "bmi": "95 kg y 172 cm",
+    "chest_pain_type": "cuando hago esfuerzo",
+    "exercise_induced_angina": "sí",
+    "family_history": "sí",
+    "smoker_status": "fumo",
+    "alcohol_units_per_week": "8",
+    "exercise_minutes_per_week": "30",
+    "sleep_hours": "5,5",
+    "stress_score": "75",
+    "wearable_owner": "sí",
+    "daily_steps": "3000",
+    "diet_quality_score": "35",
+    "resting_bp_systolic": "150",
+    "resting_bp_diastolic": "95",
+    "cholesterol_total": "240",
+    "hdl": "35",
+    "ldl": "160",
+    "triglycerides": "200",
+    "fasting_blood_sugar": "115",
+    "hba1c": "6,1",
+    "resting_heart_rate": "85",
+    "max_heart_rate_achieved": "120",
+    "st_depression": "2,0",
+}
+
+
+def start() -> AppTest:
+    app = AppTest.from_file(APP_PATH, default_timeout=120)
+    app.run()
+    return app
+
+
+def say(app: AppTest, text: str) -> None:
+    app.chat_input[0].set_value(text).run()
+
+
+def visible_text(app: AppTest) -> str:
+    parts = [element.value for element in app.markdown]
+    parts += [element.value for element in app.caption]
+    parts += [element.value for element in app.warning]
+    parts += [element.value for element in app.info]
+    parts += [element.value for element in app.error]
+    parts += [element.value for element in app.subheader]
+    return " ".join(parts)
+
+
+def metric(app: AppTest, label: str) -> str:
+    for element in app.metric:
+        if element.label == label:
+            return str(element.value)
+    raise AssertionError(f"no metric labelled {label!r}")
+
+
+# --- the app runs -----------------------------------------------------------
+
+
+def test_the_app_starts_without_raising() -> None:
+    app = start()
+
+    assert not app.exception
+
+
+def test_the_answer_set_covers_every_contract_field() -> None:
+    """Guards the fixture itself: a renamed field must not silently skip a row."""
+    assert sorted(ANSWERS) == sorted(QUESTION_ORDER)
+
+
+def test_the_synthetic_data_disclaimer_is_visible() -> None:
+    app = start()
+    banner = " ".join(element.value for element in app.error)
+
+    assert "sintéticos" in banner
+    assert "No es un dispositivo médico" in banner
+    assert "no diagnostica nada" in banner
+
+
+def test_the_interview_speaks_first() -> None:
+    app = start()
+
+    assert "¿Cuántos años tenés?" in visible_text(app)
+
+
+def test_an_answer_advances_to_the_next_question() -> None:
+    app = start()
+
+    say(app, "54")
+
+    assert not app.exception
+    assert "¿Cuál es tu sexo?" in visible_text(app)
+
+
+def test_an_unusable_answer_is_asked_again_without_storing_it() -> None:
+    app = start()
+
+    say(app, "y… muchos años, che")
+
+    assert not app.exception
+    assert "Necesito un número" in visible_text(app)
+    assert "¿Cuál es tu sexo?" not in visible_text(app)
+
+
+# --- the band, which is the point of the demo -------------------------------
+
+
+def test_stopping_early_shows_the_band_and_refuses_a_verdict() -> None:
+    app = start()
+    say(app, "54")
+    say(app, "Male")
+    say(app, "listo")
+
+    assert not app.exception
+    assert metric(app, "Campos con datos reales") == "2 / 25"
+    assert metric(app, "Confianza") == "sin veredicto"
+    text = visible_text(app)
+    assert "no alcanza para decirte nada" in text
+    assert "Sin veredicto" in text
+
+
+def test_the_band_names_what_the_user_could_go_and_get_measured() -> None:
+    app = start()
+    say(app, "54")
+    say(app, "listo")
+
+    text = visible_text(app)
+
+    assert "análisis de sangre" in text
+    assert "electrocardiograma" in text
+    assert "prueba de esfuerzo" in text
+
+
+def test_fields_filled_in_from_the_training_distribution_are_disclosed() -> None:
+    app = start()
+    say(app, "54")
+    say(app, "listo")
+
+    assert any("Campos completados con promedios" in e.label for e in app.expander)
+
+
+def test_a_complete_interview_reaches_full_coverage_and_a_verdict() -> None:
+    app = start()
+    for name in QUESTION_ORDER:
+        say(app, ANSWERS[name])
+
+    assert not app.exception
+    assert metric(app, "Campos con datos reales") == "25 / 25"
+    assert metric(app, "Confianza") == "alta"
+    assert "Estimación del modelo" in visible_text(app)
+
+
+def test_the_verdict_never_claims_a_diagnosis() -> None:
+    app = start()
+    for name in QUESTION_ORDER:
+        say(app, ANSWERS[name])
+
+    verdict = " ".join(element.value for element in app.caption if "Estimación del modelo" in element.value)
+
+    assert "No es un diagnóstico" in verdict
+    assert "podés tener" not in verdict.lower()
+    assert "tenés" not in verdict.lower()
+
+
+def test_the_interview_can_be_restarted() -> None:
+    app = start()
+    say(app, "54")
+    say(app, "listo")
+
+    app.button[0].click().run()
+
+    assert not app.exception
+    assert "¿Cuántos años tenés?" in visible_text(app)
+    assert not app.metric

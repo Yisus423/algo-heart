@@ -1,0 +1,20 @@
+# Algorithmics design tokens, sampled from screenshots of the course page with
+# `PIL` (most-common colour per region), never eyeballed.
+#
+# Reference tokens that Streamlit theming cannot express are named as constants
+# in app.py: deep purple #602B7A, indigo #220E56, alt surface #F7F9FA, neutral
+# chip #E8ECF0, cream #FFF4E2, mint #E6FFE2, gradient #8355D5 -> #AF78F1.
+
+[theme]
+base = "light"
+primaryColor = "#833AE0"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0DAFF"
+textColor = "#0F1C2C"
+linkColor = "#833AE0"
+borderColor = "#E8ECF0"
+baseRadius = "0.75rem"
+showSidebarBorder = false
+
+[server]
+headless = true
