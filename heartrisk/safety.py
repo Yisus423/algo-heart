@@ -105,9 +105,9 @@ NOW_MARKERS: tuple[str, ...] = (
 EMERGENCY_MESSAGE = (
     "**Esto suena a algo que necesita atención ahora, no un demo.**\n\n"
     "Si estás sintiendo dolor u opresión en el pecho, te falta el aire, te "
-    "desmayaste o el dolor se te corre al brazo en este momento, **cortá acá y "
-    "llamá a emergencias** (107 en CABA, 911 en el resto del país) o andá a una "
-    "guardia.\n\n"
+    "desmayaste o el dolor te baja por el brazo en este momento, **detente aquí y "
+    "llama a emergencias** (en Venezuela, 911) o acude a una sala de "
+    "emergencias.\n\n"
     "Este programa no puede evaluar nada de eso y no es un servicio médico."
 )
 

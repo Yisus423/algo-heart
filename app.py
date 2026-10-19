@@ -39,8 +39,8 @@ MINT = "#E6FFE2"
 DISCLAIMER = (
     "**Demo académico.** Este modelo fue entrenado con datos **sintéticos** "
     "(pacientes inventados por un generador, no personas reales). **No es un "
-    "dispositivo médico y no diagnostica nada.** Si tenés síntomas o dudas sobre "
-    "tu salud, consultá a un médico."
+    "dispositivo médico y no diagnostica nada.** Si tienes síntomas o dudas sobre "
+    "tu salud, consulta a un médico."
 )
 
 #: The heading family is an INFERENCE from the screenshots, not a measured value.
@@ -65,7 +65,7 @@ CONFIDENCE_LABEL = {
 CONFIDENCE_NOTE = {
     Confidence.LOW: (
         "Casi todo lo que sabemos viene de tus respuestas. Los valores que faltan "
-        "se completaron con promedios del dataset, así que tomalo como una "
+        "se completaron con promedios del dataset, así que tómalo como una "
         "aproximación gruesa."
     ),
     Confidence.MEDIUM: (
@@ -82,7 +82,7 @@ CONFIDENCE_NOTE = {
 #: Shown in the conversation where it happened, while the full message goes to
 #: the banner at the top of the screen.
 EMERGENCY_CHAT_LINE = (
-    "**Pará un segundo.** Te dejo las indicaciones arriba, en rojo. "
+    "**Detente un segundo.** Las indicaciones están arriba, en rojo. "
     "Lo que me contaste no es algo que este demo pueda evaluar."
 )
 
@@ -99,7 +99,7 @@ def load_model() -> Artifact | None:
         return cached_artifact()
     except FileNotFoundError:
         st.error(
-            "Todavía no hay un modelo entrenado. Corré esto una vez desde la raíz "
+            "Todavía no hay un modelo entrenado. Ejecuta esto una vez desde la raíz "
             "del proyecto:\n\n"
             "```bash\npython -m heartrisk.train\n```"
         )
@@ -195,7 +195,7 @@ def render_band(result: Prediction) -> None:
         st.caption(
             "Estos campos no son cosas que uno recuerde de memoria: salen de un "
             "estudio. El modelo los completa con promedios, así que la estimación "
-            "mejora mucho si los tenés."
+            "mejora mucho si los tienes."
         )
 
     if result.out_of_distribution:
@@ -261,7 +261,7 @@ def main() -> None:
 
     st.title("Riesgo cardíaco")
     st.caption(
-        "Contame tus hábitos y, si los tenés, tus números. Al final te muestro qué "
+        "Cuéntame tus hábitos y, si los tienes, tus números. Al final te muestro qué "
         "tan sólido es el resultado y qué te convendría medir."
     )
 
@@ -311,7 +311,7 @@ def main() -> None:
             st.rerun()
         return
 
-    prompt = st.chat_input("Escribí tu respuesta…")
+    prompt = st.chat_input("Escribe tu respuesta…")
     if prompt:
         st.session_state.messages.append(("user", prompt))
         apply_turn(interviewer().respond(prompt, st.session_state.interview))

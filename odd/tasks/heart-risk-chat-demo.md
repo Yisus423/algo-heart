@@ -16,6 +16,9 @@ Numbered requirements. `S#` quote the user's exact words where the user supplied
 - **S6** — Safety constraint, stated as the user's dominant fear: "tengo un miedo tremendo, imagináte que un proyecto estúpido le diga a alguien que puede tener fallas en el corazón". The app must never assert that a person may have a heart condition.
 - **S7** — Provenance: "estoy leyendo en la descripción de kaggle y dice que es un dataset sintético". The Kaggle author's own subtitle is "9,000 synthetic patients: labs, wearables, lifestyle, 30% prevalence". Every user-facing claim about accuracy must be scoped to the synthetic generator, never to clinical validity.
 - **S8** — Decision recorded this session: the product promise is the **hybrid with a visible confidence band** (user's selected option). A prediction is shown with the count of real versus imputed fields, and the band must visually outweigh the verdict.
+- **S9** — Language of the copy, corrected by the user: "dentro de la app hay que cambiar el texto, usaste el español argentino de tu persona en algo que deberia ser neutro, sin voseo ni nada, sería super raro llevar eso asi estando en venezuela". Every user-facing string is neutral Spanish: no voseo, no Rioplatense lexicon, no Argentina-only emergency numbers. Understanding the user's input stays dialect-tolerant.
+- **S10** — Credentials, corrected by the user: "la api deberia usarse mediante secrets para que los usuarios puedan entrar y probar sin poner API keys". The deployment owns the key and supplies it through Streamlit secrets, so a visitor never has to bring one. A missing key must be loud rather than a silent downgrade.
+- **S11** — Visual quality, deferred by the user: "la web te quedó re fea y con errores de diseño, dejemos eso de último". The redesign is tracked and deliberately last, after the behaviour is right.
 
 ## Measured baseline
 
@@ -82,6 +85,9 @@ Recorded explicitly rather than quietly absorbed.
 | T8 | all | Writer verification: focused tests plus a whole-document read against each `S#` | inline | `1c2b3c8` |
 | T9 | S3 | Live Gemini call, to replace the `FakeTransport` evidence with a real one | blocked: no `GEMINI_API_KEY` was provided | — |
 | T10 | all | Independent verification required by the escalated plan | blocked: no subagent runtime available, see L26 | — |
+| T11 | S9 | Neutral Spanish across every user-facing string, including the interviewer's questions, the safety message and the model's system prompt | inline, test-first | pending |
+| T12 | S10 | The key comes from Streamlit secrets so a visitor brings none, and a missing key is loud rather than a silent downgrade | inline, test-first | pending |
+| T13 | S11 | Visual redesign pass: layout, spacing and the design errors the user flagged | pending, deliberately last per the user | — |
 
 T5 was planned as a separate task and turned out to be presentation logic that only makes sense next to the chat that produces the payload, so it was folded into T2+T3 rather than left pending.
 
@@ -170,4 +176,12 @@ Checks actually run: 162 tests in the working tree; the documented quick start o
 
 **L26 (independent verification unavailable, this session):** the escalated plan required an independent verifier, so `gentle-ai-verify` was launched. It timed out with the identical symptom as the earlier writer: no first run event for `nvidia/deepseek-ai/deepseek-v4.1-flash` after four minutes. Two different agents, the same model, the same stall pattern, so subagent execution is unavailable in this environment rather than the task being wrong. It is reported as unavailable and was not retried or replaced with ceremony. **The independent verification therefore remains open, and the writer self-verification stands alone.**
 
-The writer's own verification of the claim most likely to be self-deceived — that no user-facing string asserts a heart condition — was done mechanically rather than by re-reading my own prose. Every string literal in `app.py`, `heartrisk/llm.py`, `heartrisk/interview.py`, `heartrisk/safety.py` and `heartrisk/predict.py` was extracted with `ast` (121 strings) and searched for condition-asserting cues. Seven hits, all benign on inspection: the disclaimer's "si tenés síntomas o dudas sobre tu salud, consultá a un médico" points at a doctor rather than at a condition, "si los tenés" refers to numbers, and the system prompt contains its own prohibition ("NUNCA digas que la persona puede tener una enfermedad"). That is evidence, not proof: an independent reader could still find an implication I cannot see in my own text.
+The writer's own verification of the claim most likely to be self-deceived - that no user-facing string asserts a heart condition - was done mechanically rather than by re-reading my own prose. Every string literal in `app.py`, `heartrisk/llm.py`, `heartrisk/interview.py`, `heartrisk/safety.py` and `heartrisk/predict.py` was extracted with `ast` (121 strings) and searched for condition-asserting cues. Seven hits, all benign on inspection: the disclaimer points the reader at a doctor rather than at a condition, "si los tienes" refers to numbers, and the system prompt carries its own prohibition. That is evidence, not proof: an independent reader could still find an implication I cannot see in my own text.
+
+**L27 (user correction, verbatim):** "por otro lado tambien hay cosas que no me gustaron y que hay que refactorizar, por ejemplo, la api deberia usarse mediante secrets para que los usuarios puedan entrar y probar sin poner API keys, literalmente no existía la posibilidad dentro del programa que no hubiera API key. Aparte la web te quedó re fea y con errores de diseño, dejemos eso de último"
+
+**L28 (user correction, verbatim):** "dejalo en inglés, pero dentro de la app hay que cambiar el texto, usaste el español argentino de tu persona en algo que deberia ser neutro, sin voseo ni nada, sería super raro llevar eso asi estando en venezuela"
+
+**L29 (requirement change, this session):** L27 and L28 add S9, S10 and S11 and reopen nothing else. S9 corrects my own convention decision in L7: I had written the UI copy in the persona's Rioplatense Spanish for a Venezuelan audience, which is a product defect and not a stylistic preference. S10 changes where the credential comes from and how its absence behaves. S11 is deferred to last by the user's own instruction.
+
+**L30 (open question, this session):** the previous safety message named "107 en CABA" and "911 en el resto del país", which is an Argentina-only split. S9 requires a neutral form; the replacement says "en Venezuela, 911", and that number needs the user's confirmation rather than my assumption, because a wrong emergency number is the one string in this codebase that must not be wrong.

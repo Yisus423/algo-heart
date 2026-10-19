@@ -101,8 +101,8 @@ def test_ordinary_interview_answers_are_not_emergencies(text: str) -> None:
 
 
 def test_the_message_tells_the_person_what_to_do_and_what_this_is_not() -> None:
-    assert "107" in EMERGENCY_MESSAGE
     assert "911" in EMERGENCY_MESSAGE
+    assert "sala de emergencias" in EMERGENCY_MESSAGE
     assert "no es un servicio médico" in EMERGENCY_MESSAGE
 
 

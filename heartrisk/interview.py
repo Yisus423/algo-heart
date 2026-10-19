@@ -281,7 +281,7 @@ def parse_answer(field: Field, text: str) -> object:
         value = parse_computed(field, text)
         if value is None:
             raise SchemaError(
-                "Necesito los dos valores: cuánto pesás y cuánto medís."
+                "Necesito los dos valores: cuánto pesas y cuánto mides."
             )
     elif field.kind == "numeric":
         value = parse_number(text)
@@ -290,12 +290,12 @@ def parse_answer(field: Field, text: str) -> object:
     elif field.kind == "boolean":
         value = parse_boolean(field, text)
         if value is None:
-            raise SchemaError("Respondeme con sí o no, por favor.")
+            raise SchemaError("Responde con sí o no, por favor.")
     elif field.kind in ("categorical", "binary_category"):
         value = parse_category(field, text)
         if value is None:
             raise SchemaError(
-                f"No entendí. Podés responder con: {', '.join(field.categories)}."
+                f"No entendí. Puedes responder con: {', '.join(field.categories)}."
             )
     else:  # pragma: no cover - the contract only declares the kinds above
         raise SchemaError(f"{field.name}: unsupported kind {field.kind!r}")
@@ -309,10 +309,10 @@ def question_for(field: Field) -> str:
     if field.needs_es:
         return (
             f"{field.question_es} "
-            f"Si no lo tenés a mano, decime \"no sé\" y seguimos. "
+            f"Si no lo tienes a mano, dime \"no sé\" y seguimos. "
             f"(Sale de {field.needs_es}.)"
         )
-    return f"{field.question_es} Si no lo sabés, decime \"no sé\"."
+    return f"{field.question_es} Si no lo sabes, dime \"no sé\"."
 
 
 class StubInterviewer:
@@ -325,10 +325,10 @@ class StubInterviewer:
     def opening(self) -> Turn:
         return Turn(
             messages=(
-                "¡Hola! Soy el asistente de este demo. Te voy a hacer una serie de "
+                "¡Hola! Soy el asistente de este demo. Voy a hacerte una serie de "
                 "preguntas para armar tu perfil.",
-                "Podés responder \"no sé\" en cualquiera y seguimos, o escribir "
-                "\"listo\" cuando quieras cortar.",
+                "Puedes responder \"no sé\" en cualquiera y seguimos, o escribir "
+                "\"listo\" cuando quieras terminar.",
                 question_for(_QUESTION_ORDER[0]),
             ),
             asking=_QUESTION_ORDER[0].name,

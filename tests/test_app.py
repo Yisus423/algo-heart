@@ -127,7 +127,7 @@ def test_the_synthetic_data_disclaimer_is_visible() -> None:
 def test_the_interview_speaks_first() -> None:
     app = start()
 
-    assert "¿Cuántos años tenés?" in visible_text(app)
+    assert "¿Cuántos años tienes?" in visible_text(app)
 
 
 def test_an_answer_advances_to_the_next_question() -> None:
@@ -205,8 +205,9 @@ def test_the_verdict_never_claims_a_diagnosis() -> None:
     verdict = " ".join(element.value for element in app.caption if "Estimación del modelo" in element.value)
 
     assert "No es un diagnóstico" in verdict
-    assert "podés tener" not in verdict.lower()
-    assert "tenés" not in verdict.lower()
+    # No second-person claim that the person has a condition, in any variant.
+    for claim in ("puedes tener", "tienes", "tenés", "tú tienes", "padeces"):
+        assert claim not in verdict.lower()
 
 
 def test_the_interview_can_be_restarted() -> None:
@@ -217,7 +218,7 @@ def test_the_interview_can_be_restarted() -> None:
     app.button[0].click().run()
 
     assert not app.exception
-    assert "¿Cuántos años tenés?" in visible_text(app)
+    assert "¿Cuántos años tienes?" in visible_text(app)
     assert not app.metric
 
 
@@ -231,8 +232,8 @@ def test_an_acute_symptom_stops_the_interview_and_gives_emergency_numbers() -> N
 
     assert not app.exception
     banner = " ".join(element.value for element in app.error)
-    assert "107" in banner
     assert "911" in banner
+    assert "sala de emergencias" in banner
     assert "no es un servicio médico" in banner
 
 
@@ -255,7 +256,7 @@ def test_the_interview_resumes_with_the_same_question_after_an_emergency() -> No
     assert app.chat_input, "the interview should be running again"
     resumed = [m.value for m in app.markdown if m.value.startswith("Listo.")]
     assert resumed, "resuming should say something"
-    assert "¿Cuántos años tenés?" in resumed[-1], "and re-ask the pending question"
+    assert "¿Cuántos años tienes?" in resumed[-1], "and re-ask the pending question"
 
 
 def test_describing_a_relative_who_had_a_heart_attack_is_not_an_emergency() -> None:

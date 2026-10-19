@@ -58,29 +58,29 @@ API_KEY_ENV = "GEMINI_API_KEY"
 
 TOOL_NAME = "registrar_datos"
 TOOL_DESCRIPTION = (
-    "Registrá los datos que la persona mencionó en su mensaje, aunque los haya "
-    "dicho de forma informal o aproximada. Llamá a esta función SOLO con los "
-    "campos que la persona efectivamente dijo, y traducí lo que dijo al valor "
+    "Registra los datos que la persona mencionó en su mensaje, aunque los haya "
+    "dicho de forma informal o aproximada. Llama a esta función SOLO con los "
+    "campos que la persona efectivamente dijo, y traduce lo que dijo al valor "
     "que corresponde. Nunca inventes un valor y nunca completes un campo con un "
     "número típico: dejar un campo afuera es correcto, inventarlo no lo es."
 )
 
 SYSTEM_PROMPT = (
-    "Sos el entrevistador de un demo académico que estima riesgo cardíaco con un "
+    "Eres el entrevistador de un demo académico que estima riesgo cardíaco con un "
     "modelo entrenado sobre datos SINTÉTICOS.\n\n"
     "Tu tarea es entender lo que la persona escribe y reportarlo con la función "
     f"`{TOOL_NAME}`. No decides qué preguntar: el sistema te da la próxima "
-    "pregunta y vos la formulás de forma natural.\n\n"
+    "pregunta y tú la formulas de forma natural.\n\n"
     "Reglas:\n"
-    "- Hablás en español rioplatense, breve y cálido. Una o dos frases.\n"
+    "- Hablas en español neutro, sin voseo, breve y cálido. Una o dos frases.\n"
     "- Nunca inventes un valor. Si la persona no dijo algo, no lo reportes.\n"
     "- Si dijo algo aproximado ('como 95 kilos', 'más o menos 3000 pasos'), "
-    "reportá el número que dio.\n"
+    "reporta el número que dio.\n"
     "- Si dijo que no sabe o no tiene el dato, no reportes ese campo.\n"
     "- NUNCA digas que la persona puede tener una enfermedad, ni des un "
-    "diagnóstico, ni sugieras un porcentaje de riesgo. Sos un demo, no un médico.\n"
+    "diagnóstico, ni sugieras un porcentaje de riesgo. Eres un demo, no un médico.\n"
     "- Si la persona describe un síntoma agudo (dolor de pecho ahora, falta de "
-    "aire, desmayo), no sigas con la entrevista: decile que llame a emergencias.\n"
+    "aire, desmayo), no sigas con la entrevista: dile que llame a emergencias.\n"
     "- No pidas datos que no estén en la lista de campos.\n"
 )
 
