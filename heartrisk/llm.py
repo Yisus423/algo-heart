@@ -43,7 +43,6 @@ from .interview import (
     is_skip,
     parse_answer,
     question_for,
-    question_order,
 )
 from .schema import (
     FIELDS,
@@ -63,13 +62,13 @@ API_KEY_ENV = "GEMINI_API_KEY"
 #: asking it for a sentence produced a second question in a different register.
 ACKNOWLEDGEMENT = "Anotado, gracias."
 
-#: Appended to the system prompt for a single call. This is what makes the model
-#: phrase the question the contract chose, instead of the app pasting the
-#: contract's own wording into the chat.
-PER_TURN_INSTRUCTION = (
-    "\n\nPídele ahora este dato, con tus propias palabras y sin copiarlo literal, "
-    "en una sola frase corta y cálida: «{question}». No agregues ninguna otra "
-    "pregunta."
+#: Used for the second, tool-less call of a turn. Verified against the raw
+#: response: when Gemini calls a function the reply contains only that call and no
+#: text part at all, so the phrasing cannot ride along with the extraction.
+PHRASING_PROMPT = (
+    "Reformulas preguntas para una persona, en español neutro y tratándola de "
+    "'tú'. Devuelves únicamente la pregunta reformulada, en una sola frase corta y "
+    "cálida, sin responderla y sin agregar nada más."
 )
 
 #: Accepted spellings, looked up in order. Streamlit's own documentation uses the
@@ -89,15 +88,11 @@ TOOL_DESCRIPTION = (
 SYSTEM_PROMPT = (
     "Eres el entrevistador de un demo académico que estima riesgo cardíaco con un "
     "modelo entrenado sobre datos SINTÉTICOS.\n\n"
-    "Tienes dos tareas. Primero, registrar con la función "
-    f"`{TOOL_NAME}` los datos que la persona haya contado. Segundo, formular la "
-    "próxima pregunta que el sistema te indique: el sistema decide qué dato hace "
-    "falta, tú decides cómo preguntarlo.\n\n"
+    "Tu tarea es entender lo que la persona cuenta y registrar cada dato con la "
+    f"función `{TOOL_NAME}`. Las preguntas las maneja el sistema.\n\n"
     "Reglas:\n"
     "- Hablas en español neutro y tratas a la persona de 'tú': nunca 'usted' y "
     "nunca voseo.\n"
-    "- Una sola pregunta por turno, corta y cálida. No agregues preguntas propias "
-    "ni pidas datos que no estén en la lista de campos.\n"
     "- Nunca inventes un valor. Si la persona no dijo algo, no lo reportes.\n"
     "- Si dijo algo aproximado ('como 95 kilos', 'más o menos 3000 pasos'), "
     "reporta el número que dio.\n"
@@ -126,9 +121,13 @@ class Transport(Protocol):
     """The network boundary, so tests can run without one."""
 
     def generate(
-        self, system: str, contents: list[dict[str, object]], tool: dict[str, object]
+        self, system: str, contents: list[dict[str, object]], tool: dict[str, object] | None
     ) -> ModelReply:
-        """Send the conversation and the tool definition, return one reply."""
+        """Send the conversation and, optionally, the tool definition.
+
+        ``tool`` is ``None`` for the phrasing call, which must not be able to make
+        a tool call because that is exactly what suppresses its text.
+        """
         ...
 
 
@@ -179,22 +178,6 @@ def build_answer_tool() -> dict[str, object]:
     }
 
 
-def _predicted_field(state: InterviewState, pending: Field | None) -> Field | None:
-    """The field the interview expects to ask straight after this message.
-
-    The order is fixed, so this is computable *before* the model call: once this
-    message is processed the pending field is normally resolved and the next
-    unanswered field is the one to ask. It is only a prediction, and the caller
-    discards it when the model registered something that changes which field comes
-    next, so the interview keeps following the contract rather than the guess.
-    """
-    resolved = state.attempted | ({pending.name} if pending is not None else set())
-    for candidate in question_order():
-        if candidate.name not in resolved:
-            return candidate
-    return None
-
-
 def _response_text(response: object) -> str:
     """Read the text parts of a response that also carries a tool call.
 
@@ -236,16 +219,24 @@ class GeminiTransport:
             )
 
     def generate(
-        self, system: str, contents: list[dict[str, object]], tool: dict[str, object]
+        self, system: str, contents: list[dict[str, object]], tool: dict[str, object] | None
     ) -> ModelReply:
         from google import genai
         from google.genai import types
 
-        declaration = types.FunctionDeclaration(
-            name=str(tool["name"]),
-            description=str(tool["description"]),
-            parameters_json_schema=tool["parameters_json_schema"],
-        )
+        tools = None
+        if tool is not None:
+            tools = [
+                types.Tool(
+                    function_declarations=[
+                        types.FunctionDeclaration(
+                            name=str(tool["name"]),
+                            description=str(tool["description"]),
+                            parameters_json_schema=tool["parameters_json_schema"],
+                        )
+                    ]
+                )
+            ]
         client = genai.Client(api_key=self._api_key)
         response = client.models.generate_content(
             model=self.model,
@@ -253,7 +244,7 @@ class GeminiTransport:
             config=types.GenerateContentConfig(
                 system_instruction=system,
                 temperature=self.temperature,
-                tools=[types.Tool(function_declarations=[declaration])],
+                tools=tools,
             ),
         )
 
@@ -284,18 +275,15 @@ class GeminiInterviewer:
         self._transcript.append({"role": "user", "parts": [{"text": text}]})
         pending = FIELDS_BY_NAME.get(state.pending) if state.pending else None
 
-        predicted = _predicted_field(state, pending)
-        system = SYSTEM_PROMPT + (
-            PER_TURN_INSTRUCTION.format(question=question_for(predicted))
-            if predicted is not None
-            else ""
-        )
-
-        reply = self._transport.generate(
-            system, list(self._transcript), build_answer_tool()
-        )
-        if reply.text:
-            self._transcript.append({"role": "model", "parts": [{"text": reply.text}]})
+        try:
+            reply = self._transport.generate(
+                SYSTEM_PROMPT, list(self._transcript), build_answer_tool()
+            )
+        except Exception:
+            # The model is a third party. On stage it can rate-limit or return a
+            # 503, and a traceback in front of an audience is worse than a plainer
+            # interview, so the turn degrades instead of crashing.
+            return self._offline_turn(text, state, pending)
 
         rejected, registered = self._store(reply.arguments, state)
 
@@ -316,8 +304,8 @@ class GeminiInterviewer:
             )
 
         if pending is not None and pending.name not in state.attempted:
-            # The model did not resolve the field being asked and the fallback
-            # parser could not either: ask it again instead of moving on.
+            # Neither the model nor the fallback parser resolved the field that was
+            # asked, so ask it again rather than moving on and losing it.
             state.pending = pending.name
             messages.append(f"Perdón, de nuevo: {question_for(pending)}")
             return Turn(messages=tuple(messages), asking=pending.name)
@@ -326,26 +314,78 @@ class GeminiInterviewer:
         if following is None:
             state.pending = None
             state.finished = True
-            messages.append(
-                reply.text or "Perfecto, con esto ya puedo calcular el resultado."
-            )
+            messages.append("Perfecto, con esto ya puedo calcular el resultado.")
             return Turn(messages=tuple(messages), complete=True)
 
         state.pending = following.name
-        asked_by_model = (
-            predicted is not None
-            and following.name == predicted.name
-            and "?" in reply.text
-        )
-        if asked_by_model:
-            messages.append(reply.text)
-        else:
-            # The prediction missed, or the model did not actually phrase a
-            # question. The contract's own wording goes in rather than nothing.
-            opening = reply.text or (ACKNOWLEDGEMENT if registered else "")
-            if opening:
-                messages.append(opening)
-            messages.append(question_for(following))
+        if registered or rejected:
+            messages.append(ACKNOWLEDGEMENT)
+        # The contract decided which field to ask; the model decides how to ask it.
+        messages.append(self._phrase(question_for(following)))
+        return Turn(messages=tuple(messages), asking=following.name)
+
+    def _phrase(self, question: str) -> str:
+        """Put the contract's question in the model's words, in its own call.
+
+        Separate because Gemini returns no text alongside a tool call. If it fails
+        or comes back empty the contract's own wording is used, so the interview
+        never leaves the person without a question to answer.
+        """
+        try:
+            # The instruction has to be explicit that this is a question to ask of
+            # someone else. Sending the bare question as a user turn made the model
+            # read it as being addressed to itself: asked to rephrase "¿Cuál es tu
+            # sexo?" it answered "¿Cómo te gustaría que me identificara?".
+            instruction = (
+                "Reformula esta pregunta para hacérsela a la persona, sin "
+                f"responderla:\n\n{question}"
+            )
+            reply = self._transport.generate(
+                PHRASING_PROMPT,
+                [{"role": "user", "parts": [{"text": instruction}]}],
+                None,
+            )
+        except Exception:
+            return question
+        phrased = reply.text.strip()
+        return phrased if "?" in phrased else question
+
+    def _offline_turn(
+        self, text: str, state: InterviewState, pending: Field | None
+    ) -> Turn:
+        """Keep the interview moving when the model cannot be reached at all.
+
+        The deterministic parser still handles the field being asked, so the
+        answer is not lost, and the person is told plainly that the model is down.
+        """
+        if pending is not None and pending.name not in state.attempted:
+            if is_skip(text):
+                state.skipped.add(pending.name)
+            else:
+                try:
+                    state.answers[pending.name] = parse_answer(pending, text)
+                except SchemaError:
+                    pass
+
+        messages = [
+            "Se me cortó la conexión con el modelo. Guardé tu respuesta de la forma "
+            "más simple que pude y seguimos igual."
+        ]
+
+        if pending is not None and pending.name not in state.attempted:
+            state.pending = pending.name
+            messages.append(f"Perdón, de nuevo: {question_for(pending)}")
+            return Turn(messages=tuple(messages), asking=pending.name)
+
+        following = state.next_field()
+        if following is None:
+            state.pending = None
+            state.finished = True
+            messages.append("Con esto ya puedo calcular el resultado.")
+            return Turn(messages=tuple(messages), complete=True)
+
+        state.pending = following.name
+        messages.append(question_for(following))
         return Turn(messages=tuple(messages), asking=following.name)
 
     def _store(

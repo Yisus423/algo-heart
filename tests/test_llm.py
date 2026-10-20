@@ -247,46 +247,68 @@ def test_the_opening_does_not_need_the_network() -> None:
     assert transport.calls == []
 
 
-def test_the_model_is_told_to_ask_only_the_question_it_is_given() -> None:
-    """The contract picks the field, the model picks the wording."""
-    assert "el sistema decide qué dato hace" in SYSTEM_PROMPT
-    assert "No agregues preguntas propias" in SYSTEM_PROMPT
+def test_the_extraction_prompt_leaves_the_questions_to_the_system() -> None:
+    """Phrasing happens in a second, tool-less call, not in this prompt."""
+    assert "Las preguntas las maneja el sistema" in SYSTEM_PROMPT
 
 
-def test_the_question_to_ask_is_handed_to_the_model() -> None:
-    transport = FakeTransport([ModelReply(text="ok")])
-    interviewer, state, _ = start(transport)
-
-    interviewer.respond("62", state)
-
-    system = str(transport.calls[0]["system"])
-    assert "Pídele ahora este dato" in system
-    assert "sexo" in system.lower()
-
-
-def test_the_model_phrases_the_question_instead_of_the_contract() -> None:
-    """Spec S12: the contract decides which question, the model decides how."""
+def test_the_question_is_phrased_in_a_second_call_without_tools() -> None:
+    """Spec S12. Gemini returns no text alongside a tool call, so the phrasing
+    cannot ride along with the extraction; it needs its own call."""
     transport = FakeTransport(
-        [ModelReply(text="¿Y cuál es tu sexo?", arguments={"age": 62})]
+        [ModelReply(arguments={"age": 62}), ModelReply(text="¿Y tu sexo?")]
     )
     interviewer, state, _ = start(transport)
 
     turn = interviewer.respond("tengo 62", state)
 
-    assert turn.messages == ("¿Y cuál es tu sexo?",)
-    assert "Si no lo sabes" not in " ".join(turn.messages)
+    assert len(transport.calls) == 2
+    assert transport.calls[1]["tool"] is None, "the phrasing call must have no tools"
+    assert turn.messages == ("Anotado, gracias.", "¿Y tu sexo?")
+
+    sent = transport.calls[1]["contents"][0]["parts"][0]["text"]  # type: ignore[index]
+    assert "sin responderla" in sent, "or the model answers the question itself"
+    assert "¿Cuál es tu sexo?" in sent, "and it is told which question to rephrase"
 
 
-def test_the_contract_asks_when_the_model_does_not_phrase_a_question() -> None:
-    """A model that only acknowledges must not leave the person with no question."""
-    transport = FakeTransport([ModelReply(text="Anotado.", arguments={"age": 62})])
+def test_the_contracts_wording_is_used_when_the_phrasing_call_returns_nothing() -> None:
+    """The person must never be left without a question to answer."""
+    transport = FakeTransport([ModelReply(arguments={"age": 62}), ModelReply()])
     interviewer, state, _ = start(transport)
 
     turn = interviewer.respond("tengo 62", state)
 
-    joined = " ".join(turn.messages)
-    assert "Anotado." in joined
-    assert "Si no lo sabes" in joined
+    assert turn.messages[-1].startswith("¿Cuál es tu sexo?")
+
+
+def test_a_reply_without_a_question_mark_is_not_used_as_the_question() -> None:
+    transport = FakeTransport(
+        [ModelReply(arguments={"age": 62}), ModelReply(text="ok")]
+    )
+    interviewer, state, _ = start(transport)
+
+    turn = interviewer.respond("tengo 62", state)
+
+    assert turn.messages[-1].startswith("¿Cuál es tu sexo?")
+
+
+def test_a_failing_model_degrades_instead_of_crashing() -> None:
+    """A 503 in front of an audience must not be a traceback on screen."""
+
+    class Exploding:
+        def generate(self, system, contents, tool):  # noqa: ANN001, ANN201
+            raise RuntimeError("503 UNAVAILABLE: high demand")
+
+    interviewer = GeminiInterviewer(Exploding())
+    state = InterviewState()
+    turn = interviewer.opening()
+    state.pending = turn.asking
+
+    turn = interviewer.respond("62", state)
+
+    assert state.answers["age"] == 62, "the answer must not be lost"
+    assert "cortó la conexión" in turn.messages[0]
+    assert turn.asking == "sex", "and the interview keeps moving"
 
 
 def test_the_app_acknowledges_when_the_model_returns_no_text() -> None:
@@ -337,7 +359,8 @@ def test_the_conversation_is_sent_back_to_the_model_each_turn() -> None:
     interviewer.respond("62", state)
     interviewer.respond("hombre", state)
 
-    assert len(transport.calls[1]["contents"]) >= 2  # type: ignore[arg-type]
+    extraction = [call for call in transport.calls if call["tool"] is not None]
+    assert len(extraction[1]["contents"]) >= 2, "the transcript is resent each turn"
 
 
 def test_without_an_api_key_the_app_falls_back_to_the_deterministic_interviewer(
