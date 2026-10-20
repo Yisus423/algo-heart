@@ -77,6 +77,11 @@ class Field:
             ``False`` means the value only exists after a measurement.
         needs_es: for ``askable=False``, what the person would have to obtain.
             The app surfaces this when coverage is too low to answer.
+        source_es: short heading for grouping the field by where it comes from,
+            e.g. "Análisis de sangre". ``needs_es`` is a phrase for a sentence
+            ("Sale de un análisis de sangre"), so using it as a heading read as a
+            fragment: "un tensiómetro — ○ Presión sistólica en reposo". It is part
+            of the contract so that a new field cannot ship without one.
         unit_es: unit shown next to the value, when there is one.
         minimum: smallest plausibly true value. Inclusive.
         maximum: largest plausibly true value. Inclusive.
@@ -94,6 +99,7 @@ class Field:
     question_es: str
     askable: bool
     needs_es: str | None = None
+    source_es: str | None = None
     unit_es: str | None = None
     minimum: float | None = None
     maximum: float | None = None
@@ -127,6 +133,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes tu presión sistólica medida en reposo?",
         askable=False,
         needs_es="un tensiómetro",
+        source_es="Tensiómetro",
         unit_es="mmHg",
         minimum=50,
         maximum=300,
@@ -138,6 +145,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes tu presión diastólica medida en reposo?",
         askable=False,
         needs_es="un tensiómetro",
+        source_es="Tensiómetro",
         unit_es="mmHg",
         minimum=20,
         maximum=200,
@@ -149,6 +157,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes tu colesterol total de un análisis reciente?",
         askable=False,
         needs_es="un análisis de sangre",
+        source_es="Análisis de sangre",
         unit_es="mg/dL",
         minimum=50,
         maximum=700,
@@ -160,6 +169,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes tu HDL de un análisis reciente?",
         askable=False,
         needs_es="un análisis de sangre",
+        source_es="Análisis de sangre",
         unit_es="mg/dL",
         minimum=5,
         maximum=200,
@@ -171,6 +181,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes tu LDL de un análisis reciente?",
         askable=False,
         needs_es="un análisis de sangre",
+        source_es="Análisis de sangre",
         unit_es="mg/dL",
         minimum=10,
         maximum=500,
@@ -182,6 +193,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes tus triglicéridos de un análisis reciente?",
         askable=False,
         needs_es="un análisis de sangre",
+        source_es="Análisis de sangre",
         unit_es="mg/dL",
         minimum=10,
         maximum=2000,
@@ -193,6 +205,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes tu glucemia en ayunas de un análisis reciente?",
         askable=False,
         needs_es="un análisis de sangre",
+        source_es="Análisis de sangre",
         unit_es="mg/dL",
         minimum=20,
         maximum=600,
@@ -204,6 +217,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes tu hemoglobina glicosilada de un análisis reciente?",
         askable=False,
         needs_es="un análisis de sangre",
+        source_es="Análisis de sangre",
         unit_es="%",
         minimum=2,
         maximum=20,
@@ -226,6 +240,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Sabes cuántas pulsaciones por minuto tienes en reposo?",
         askable=False,
         needs_es="un tensiómetro, un oxímetro o tu reloj",
+        source_es="Pulso en reposo",
         unit_es="lpm",
         minimum=20,
         maximum=250,
@@ -237,6 +252,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes el valor de frecuencia máxima de una prueba de esfuerzo?",
         askable=False,
         needs_es="una prueba de esfuerzo",
+        source_es="Prueba de esfuerzo",
         unit_es="lpm",
         minimum=40,
         maximum=250,
@@ -271,6 +287,7 @@ FIELDS: tuple[Field, ...] = (
         question_es="¿Tienes el valor de depresión del segmento ST de un electrocardiograma?",
         askable=False,
         needs_es="un electrocardiograma",
+        source_es="Electrocardiograma",
         unit_es="mm",
         minimum=-5,
         maximum=15,
@@ -497,3 +514,13 @@ def validate_value(field: Field, value: object) -> None:
         return
 
     raise SchemaError(f"{field.name}: unsupported kind {field.kind!r}")
+
+
+def source_group(field: Field) -> str:
+    """Heading the field belongs under: where its number comes from.
+
+    Falls back to the field's own label rather than to nothing, so a future
+    measurement field that forgets ``source_es`` still shows up in the checklist
+    instead of disappearing from it.
+    """
+    return field.source_es or field.label_es

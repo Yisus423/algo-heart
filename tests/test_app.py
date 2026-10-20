@@ -106,6 +106,18 @@ def visible_text(app: AppTest) -> str:
     return " ".join(parts)
 
 
+def chat_bubbles(app: AppTest) -> list[tuple[str, str]]:
+    """Just the conversation, as (role, text) pairs.
+
+    ``app.markdown`` also holds the data checklist, so counting bubbles through it
+    counted the checklist lines too. The chat messages are their own element type.
+    """
+    return [
+        (message.name, "\n\n".join(part.value for part in message.markdown))
+        for message in app.chat_message
+    ]
+
+
 def metric(app: AppTest, label: str) -> str:
     for element in app.metric:
         if element.label == label:
@@ -128,12 +140,61 @@ def test_the_answer_set_covers_every_contract_field() -> None:
 
 
 def test_the_synthetic_data_disclaimer_is_visible() -> None:
+    """Spec S6: the alarm line and the detail, both on screen, neither dismissible."""
     app = start()
     banner = " ".join(element.value for element in app.error)
+    captions = " ".join(element.value for element in app.caption)
 
     assert "sintéticos" in banner
-    assert "No es un dispositivo médico" in banner
-    assert "no diagnostica nada" in banner
+    assert "No diagnostica nada" in banner
+    assert "No es un dispositivo médico" in captions
+    assert "consulta a un médico" in captions
+
+
+# --- the checklist of required data, spec S14 -------------------------------
+
+
+def test_the_checklist_counts_the_contract_from_the_start() -> None:
+    app = start()
+
+    assert "Tus datos · 0 de 25" in visible_text(app)
+
+
+def test_the_checklist_ticks_a_field_as_soon_as_it_arrives() -> None:
+    app = start()
+
+    say(app, "54")
+
+    text = visible_text(app)
+    assert "Tus datos · 1 de 25" in text
+    assert "[x] Edad · 54 años" in text
+    assert "[ ] Sexo" in text
+
+
+def test_the_checklist_never_shows_the_datasets_own_vocabulary() -> None:
+    """The contract stores `Male`; a person must not read that."""
+    app = start()
+    say(app, "54")
+    say(app, "hombre")
+
+    text = visible_text(app)
+    assert "[x] Sexo · hombre" in text
+    assert "Male" not in text
+
+
+def test_the_checklist_groups_each_number_by_where_it_comes_from() -> None:
+    """This is the teaching part: those predictors cannot be guessed."""
+    app = start()
+
+    text = visible_text(app)
+    for heading in (
+        "Análisis de sangre",
+        "Tensiómetro",
+        "Pulso en reposo",
+        "Prueba de esfuerzo",
+        "Electrocardiograma",
+    ):
+        assert heading in text, heading
 
 
 def test_the_interview_speaks_first() -> None:
@@ -149,7 +210,7 @@ def test_the_greeting_is_shown_exactly_once() -> None:
     same helper that appends the turn, so a visitor saw the greeting twice.
     """
     app = start()
-    spoken = " ".join(element.value for element in app.markdown)
+    spoken = " ".join(text for _, text in chat_bubbles(app))
 
     assert spoken.count("¡Hola!") == 1
     assert spoken.count("¿Cuántos años tienes?") == 1
@@ -158,10 +219,11 @@ def test_the_greeting_is_shown_exactly_once() -> None:
 def test_the_opening_is_one_single_message() -> None:
     """One bubble per turn. Three bubbles with three avatars read as three speakers."""
     app = start()
-    bubbles = [element.value for element in app.markdown]
+    bubbles = chat_bubbles(app)
 
     assert len(bubbles) == 1, bubbles
-    assert "\n\n" in bubbles[0]
+    assert bubbles[0][0] == "assistant"
+    assert "\n\n" in bubbles[0][1]
 
 
 def test_a_turn_adds_one_user_bubble_and_one_assistant_bubble() -> None:
@@ -170,10 +232,10 @@ def test_a_turn_adds_one_user_bubble_and_one_assistant_bubble() -> None:
 
     say(app, "54")
 
-    bubbles = [element.value for element in app.markdown]
-    assert len(bubbles) == 3, bubbles  # opening, the answer, the reply
-    assert bubbles[1] == "54"
-    assert "¿Cuál es tu sexo?" in bubbles[2]
+    bubbles = chat_bubbles(app)
+    assert [role for role, _ in bubbles] == ["assistant", "user", "assistant"]
+    assert bubbles[1][1] == "54"
+    assert "¿Cuál es tu sexo?" in bubbles[2][1]
 
 
 def test_an_answer_advances_to_the_next_question() -> None:

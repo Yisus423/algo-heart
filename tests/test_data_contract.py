@@ -146,6 +146,21 @@ def test_to_features_refuses_a_frame_that_was_never_cleaned() -> None:
         to_features(valid_frame())
 
 
+def test_every_measurement_field_names_its_source_and_its_short_heading() -> None:
+    """The checklist groups by ``source_es``, so a missing one is a bad heading."""
+    for contract_field in FIELDS:
+        if not contract_field.askable:
+            assert contract_field.needs_es, contract_field.name
+            assert contract_field.source_es, contract_field.name
+
+
+def test_the_short_heading_is_not_the_sentence_phrase() -> None:
+    """`needs_es` reads as a fragment when used as a heading ("un tensiómetro")."""
+    measurement_fields = [f for f in FIELDS if not f.askable]
+
+    assert all(f.source_es != f.needs_es for f in measurement_fields)
+
+
 def test_load_raw_reports_a_missing_file() -> None:
     with pytest.raises(FileNotFoundError):
         load_raw(REPO_ROOT / "data" / "raw" / "does-not-exist.csv")

@@ -27,7 +27,7 @@ from heartrisk.interview import InterviewState, Interviewer, Turn, question_for
 from heartrisk.llm import API_KEY_ENV, GeminiInterviewer, build_interviewer
 from heartrisk.predict import Confidence, Prediction, predict
 from heartrisk.safety import EMERGENCY_MESSAGE
-from heartrisk.schema import FIELDS_BY_NAME
+from heartrisk.schema import FIELDS, FIELDS_BY_NAME, source_group
 
 # Design tokens sampled from the course page that [theme] cannot express.
 DEEP_PURPLE = "#602B7A"
@@ -37,12 +37,29 @@ CHIP_NEUTRAL = "#E8ECF0"
 CREAM = "#FFF4E2"
 MINT = "#E6FFE2"
 
-#: Spec S6 and S7. Persistent, never dismissible, never behind an expander.
-DISCLAIMER = (
-    "**Demo académico con datos sintéticos.** Pacientes inventados por un "
-    "generador, no personas reales. **No es un dispositivo médico y no diagnostica "
-    "nada.** Si tienes síntomas, consulta a un médico."
+#: The alarm stays, the paragraph does not: one red line, and the detail in a
+#: caption underneath. S6 needs the disclaimer read, not the whole first screen
+#: taken. See L40 in the feature document.
+DISCLAIMER = "**Demo académico con datos sintéticos. No diagnostica nada.**"
+DISCLAIMER_DETAIL = (
+    "No es un dispositivo médico. Si tienes síntomas o dudas sobre tu salud, "
+    "consulta a un médico."
 )
+
+#: Spanish for the values the contract stores in English, for the checklist.
+CATEGORY_ES: dict[str, dict[str, str]] = {
+    "sex": {"Female": "mujer", "Male": "hombre"},
+    "smoker_status": {"Never": "nunca fumó", "Former": "ex fumador", "Current": "fuma"},
+    "chest_pain_type": {
+        "Asymptomatic": "sin dolor",
+        "Atypical Angina": "angina atípica",
+        "Non-Anginal Pain": "dolor no cardíaco",
+        "Typical Angina": "angina típica",
+    },
+}
+
+#: Group heading for the fields a person answers from memory.
+FROM_MEMORY = "De tus respuestas"
 
 CONFIDENCE_LABEL = {
     Confidence.NONE: "sin veredicto",
@@ -261,6 +278,60 @@ def render_verdict(result: Prediction) -> None:
         )
 
 
+def format_value(contract_field, value: object) -> str:
+    """The captured value as a person would write it, not as the contract stores it.
+
+    The contract keeps categoricals in English (``Male``, ``Never``) because those
+    are the dataset's own labels, and showing them raw would put dataset vocabulary
+    in front of the user.
+    """
+    if contract_field.kind == "boolean":
+        return "sí" if value else "no"
+    if contract_field.kind in ("categorical", "binary_category"):
+        return CATEGORY_ES.get(contract_field.name, {}).get(str(value), str(value))
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = f"{value:g}"
+        return f"{number} {contract_field.unit_es}" if contract_field.unit_es else number
+    return str(value)
+
+
+def render_data_checklist(state: InterviewState) -> None:
+    """Spec S14: what is already known, and where each missing number comes from.
+
+    Grouped by origin rather than by contract order, so the panel doubles as the
+    answer to "what should I go and get measured" and not only as a progress
+    readout. This is the part of the demo with teaching value: the strongest
+    predictors in this dataset cannot be guessed, they have to be measured.
+
+    It lives in the sidebar on purpose. In the main column it took most of the
+    screen and pushed the conversation below the fold, which defeats the point of a
+    chat. Here the checklist stays visible and ticks itself while the chat keeps
+    the room.
+    """
+    groups: dict[str, list[str]] = defaultdict(list)
+    for contract_field in FIELDS:
+        # Markdown task-list syntax, which Streamlit renders as real checkboxes.
+        # A bullet plus my own "✓"/"○" produced a doubled marker ("• ○ Edad"), and
+        # this is the checkbox the user asked for in the first place.
+        if contract_field.name in state.answers:
+            value = format_value(contract_field, state.answers[contract_field.name])
+            item = f"- [x] {contract_field.label_es} · {value}"
+        else:
+            item = f"- [ ] {contract_field.label_es}"
+        groups[source_group(contract_field) if not contract_field.askable else FROM_MEMORY].append(item)
+
+    # The interview answers lead, then the measurements in contract order, so the
+    # panel reads the same way every time.
+    ordered = [FROM_MEMORY] + [g for g in groups if g != FROM_MEMORY]
+
+    with st.sidebar:
+        st.markdown(f"### Tus datos · {len(state.answers)} de {len(FIELDS_BY_NAME)}")
+        st.progress(len(state.answers) / len(FIELDS_BY_NAME))
+        for group in ordered:
+            st.markdown(f"**{group}**")
+            st.markdown("\n".join(groups[group]))
+
+
 def engine_label(active: Interviewer) -> str:
     if isinstance(active, GeminiInterviewer):
         return "Gemini (entiende respuestas en lenguaje natural)"
@@ -276,6 +347,7 @@ def main() -> None:
     # The typeface is configured natively in .streamlit/config.toml, so this file
     # never injects raw HTML.
     st.error(DISCLAIMER, icon="⚠️")
+    st.caption(DISCLAIMER_DETAIL)
 
     st.title("Riesgo cardíaco")
     st.caption(
@@ -309,6 +381,8 @@ def main() -> None:
             icon="🔑",
         )
         st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
+
+    render_data_checklist(st.session_state.interview)
 
     if st.session_state.get("emergency"):
         st.error(EMERGENCY_MESSAGE, icon="🚑")
