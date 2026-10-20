@@ -43,6 +43,7 @@ from .interview import (
     is_skip,
     parse_answer,
     question_for,
+    question_order,
 )
 from .schema import (
     FIELDS,
@@ -62,6 +63,15 @@ API_KEY_ENV = "GEMINI_API_KEY"
 #: asking it for a sentence produced a second question in a different register.
 ACKNOWLEDGEMENT = "Anotado, gracias."
 
+#: Appended to the system prompt for a single call. This is what makes the model
+#: phrase the question the contract chose, instead of the app pasting the
+#: contract's own wording into the chat.
+PER_TURN_INSTRUCTION = (
+    "\n\nPídele ahora este dato, con tus propias palabras y sin copiarlo literal, "
+    "en una sola frase corta y cálida: «{question}». No agregues ninguna otra "
+    "pregunta."
+)
+
 #: Accepted spellings, looked up in order. Streamlit's own documentation uses the
 #: upper-case form; Python developers tend to write the lower-case one.
 API_KEY_NAMES: tuple[str, ...] = ("GEMINI_API_KEY", "gemini_api_key")
@@ -79,16 +89,15 @@ TOOL_DESCRIPTION = (
 SYSTEM_PROMPT = (
     "Eres el entrevistador de un demo académico que estima riesgo cardíaco con un "
     "modelo entrenado sobre datos SINTÉTICOS.\n\n"
-    "Tu única tarea es entender lo que la persona escribe y reportarlo con la "
-    f"función `{TOOL_NAME}`.\n\n"
-    "El sistema ya le muestra a la persona la próxima pregunta y reconoce los "
-    "datos que registraste. Por eso NO preguntes nada, no pidas ningún dato y "
-    "no agregues texto de relleno: devuelve un texto vacío, salvo que tengas "
-    "algo concreto que aclarar, en una frase corta.\n\n"
+    "Tienes dos tareas. Primero, registrar con la función "
+    f"`{TOOL_NAME}` los datos que la persona haya contado. Segundo, formular la "
+    "próxima pregunta que el sistema te indique: el sistema decide qué dato hace "
+    "falta, tú decides cómo preguntarlo.\n\n"
     "Reglas:\n"
     "- Hablas en español neutro y tratas a la persona de 'tú': nunca 'usted' y "
-    "nunca voseo. Breve y cálido: una frase.\n"
-    "- No hagas preguntas de ningún tipo.\n"
+    "nunca voseo.\n"
+    "- Una sola pregunta por turno, corta y cálida. No agregues preguntas propias "
+    "ni pidas datos que no estén en la lista de campos.\n"
     "- Nunca inventes un valor. Si la persona no dijo algo, no lo reportes.\n"
     "- Si dijo algo aproximado ('como 95 kilos', 'más o menos 3000 pasos'), "
     "reporta el número que dio.\n"
@@ -97,7 +106,6 @@ SYSTEM_PROMPT = (
     "diagnóstico, ni sugieras un porcentaje de riesgo. Eres un demo, no un médico.\n"
     "- Si la persona describe un síntoma agudo (dolor de pecho ahora, falta de "
     "aire, desmayo), no sigas con la entrevista: dile que llame a emergencias.\n"
-    "- No pidas datos que no estén en la lista de campos.\n"
 )
 
 
@@ -169,6 +177,22 @@ def build_answer_tool() -> dict[str, object]:
             "additionalProperties": False,
         },
     }
+
+
+def _predicted_field(state: InterviewState, pending: Field | None) -> Field | None:
+    """The field the interview expects to ask straight after this message.
+
+    The order is fixed, so this is computable *before* the model call: once this
+    message is processed the pending field is normally resolved and the next
+    unanswered field is the one to ask. It is only a prediction, and the caller
+    discards it when the model registered something that changes which field comes
+    next, so the interview keeps following the contract rather than the guess.
+    """
+    resolved = state.attempted | ({pending.name} if pending is not None else set())
+    for candidate in question_order():
+        if candidate.name not in resolved:
+            return candidate
+    return None
 
 
 def _response_text(response: object) -> str:
@@ -260,8 +284,15 @@ class GeminiInterviewer:
         self._transcript.append({"role": "user", "parts": [{"text": text}]})
         pending = FIELDS_BY_NAME.get(state.pending) if state.pending else None
 
+        predicted = _predicted_field(state, pending)
+        system = SYSTEM_PROMPT + (
+            PER_TURN_INSTRUCTION.format(question=question_for(predicted))
+            if predicted is not None
+            else ""
+        )
+
         reply = self._transport.generate(
-            SYSTEM_PROMPT, list(self._transcript), build_answer_tool()
+            system, list(self._transcript), build_answer_tool()
         )
         if reply.text:
             self._transcript.append({"role": "model", "parts": [{"text": reply.text}]})
@@ -277,8 +308,7 @@ class GeminiInterviewer:
                 except SchemaError:
                     pass
 
-        spoken = reply.text or (ACKNOWLEDGEMENT if registered else "")
-        messages = [spoken] if spoken else []
+        messages: list[str] = []
         if rejected:
             messages.append(
                 "No pude usar alguno de esos valores, así que no los guardé: "
@@ -296,11 +326,26 @@ class GeminiInterviewer:
         if following is None:
             state.pending = None
             state.finished = True
-            messages.append("Perfecto, con esto ya puedo calcular el resultado.")
+            messages.append(
+                reply.text or "Perfecto, con esto ya puedo calcular el resultado."
+            )
             return Turn(messages=tuple(messages), complete=True)
 
         state.pending = following.name
-        messages.append(question_for(following))
+        asked_by_model = (
+            predicted is not None
+            and following.name == predicted.name
+            and "?" in reply.text
+        )
+        if asked_by_model:
+            messages.append(reply.text)
+        else:
+            # The prediction missed, or the model did not actually phrase a
+            # question. The contract's own wording goes in rather than nothing.
+            opening = reply.text or (ACKNOWLEDGEMENT if registered else "")
+            if opening:
+                messages.append(opening)
+            messages.append(question_for(following))
         return Turn(messages=tuple(messages), asking=following.name)
 
     def _store(

@@ -121,6 +121,16 @@ _QUESTION_ORDER: tuple[Field, ...] = tuple(
 ) + tuple(f for f in FIELDS if f.name not in set(ASKABLE_FIELDS))
 
 
+def question_order() -> tuple[Field, ...]:
+    """Every field in the order the interview asks them: answerable ones first.
+
+    Public because the language-model interviewer needs to predict which question
+    comes next before it calls the model, so it can hand that question over to be
+    phrased rather than pasted.
+    """
+    return _QUESTION_ORDER
+
+
 @dataclass(slots=True)
 class InterviewState:
     """What the interview knows so far. Lives in ``st.session_state``.

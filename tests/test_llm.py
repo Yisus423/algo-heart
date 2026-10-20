@@ -247,23 +247,46 @@ def test_the_opening_does_not_need_the_network() -> None:
     assert transport.calls == []
 
 
-def test_the_model_is_told_not_to_ask_its_own_questions() -> None:
-    """The app appends the contract's question, so a model question duplicates it.
-
-    On screen it read as two different questions in two different registers:
-    "Entendido. ¿Cuál es su sexo?" followed by "¿Cuál es tu sexo?"
-    """
-    assert "NO preguntes nada" in SYSTEM_PROMPT
+def test_the_model_is_told_to_ask_only_the_question_it_is_given() -> None:
+    """The contract picks the field, the model picks the wording."""
+    assert "el sistema decide qué dato hace" in SYSTEM_PROMPT
+    assert "No agregues preguntas propias" in SYSTEM_PROMPT
 
 
-def test_the_model_is_told_the_app_reports_the_data() -> None:
-    """Gemini returns no text alongside a tool call, so the app acknowledges.
+def test_the_question_to_ask_is_handed_to_the_model() -> None:
+    transport = FakeTransport([ModelReply(text="ok")])
+    interviewer, state, _ = start(transport)
 
-    Leaving it to the model produced a mute interviewer, and asking it for a
-    sentence produced a second question in a different register.
-    """
-    assert "reconoce los datos que registraste" in SYSTEM_PROMPT
-    assert "devuelve un texto vacío" in SYSTEM_PROMPT
+    interviewer.respond("62", state)
+
+    system = str(transport.calls[0]["system"])
+    assert "Pídele ahora este dato" in system
+    assert "sexo" in system.lower()
+
+
+def test_the_model_phrases_the_question_instead_of_the_contract() -> None:
+    """Spec S12: the contract decides which question, the model decides how."""
+    transport = FakeTransport(
+        [ModelReply(text="¿Y cuál es tu sexo?", arguments={"age": 62})]
+    )
+    interviewer, state, _ = start(transport)
+
+    turn = interviewer.respond("tengo 62", state)
+
+    assert turn.messages == ("¿Y cuál es tu sexo?",)
+    assert "Si no lo sabes" not in " ".join(turn.messages)
+
+
+def test_the_contract_asks_when_the_model_does_not_phrase_a_question() -> None:
+    """A model that only acknowledges must not leave the person with no question."""
+    transport = FakeTransport([ModelReply(text="Anotado.", arguments={"age": 62})])
+    interviewer, state, _ = start(transport)
+
+    turn = interviewer.respond("tengo 62", state)
+
+    joined = " ".join(turn.messages)
+    assert "Anotado." in joined
+    assert "Si no lo sabes" in joined
 
 
 def test_the_app_acknowledges_when_the_model_returns_no_text() -> None:

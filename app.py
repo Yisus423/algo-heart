@@ -39,10 +39,9 @@ MINT = "#E6FFE2"
 
 #: Spec S6 and S7. Persistent, never dismissible, never behind an expander.
 DISCLAIMER = (
-    "**Demo académico.** Este modelo fue entrenado con datos **sintéticos** "
-    "(pacientes inventados por un generador, no personas reales). **No es un "
-    "dispositivo médico y no diagnostica nada.** Si tienes síntomas o dudas sobre "
-    "tu salud, consulta a un médico."
+    "**Demo académico con datos sintéticos.** Pacientes inventados por un "
+    "generador, no personas reales. **No es un dispositivo médico y no diagnostica "
+    "nada.** Si tienes síntomas, consulta a un médico."
 )
 
 CONFIDENCE_LABEL = {
@@ -154,7 +153,13 @@ def apply_turn(turn: Turn) -> None:
         st.session_state.emergency = True
         return
 
-    st.session_state.messages.extend(("assistant", line) for line in turn.messages)
+    spoken = "\n\n".join(line for line in turn.messages if line)
+    if spoken:
+        # One bubble per turn, not one per line. Three separate bubbles with three
+        # avatars for a single opening read as three different speakers, and every
+        # model turn produced two of them, so the history stopped looking like a
+        # conversation at all.
+        st.session_state.messages.append(("assistant", spoken))
     if turn.asking is not None:
         st.session_state.interview.pending = turn.asking
     if turn.complete:
@@ -285,11 +290,12 @@ def main() -> None:
         start_interview()
 
     if isinstance(interviewer(), GeminiInterviewer):
-        st.info(
-            "Para interpretar tus respuestas, este demo manda el texto a Google "
-            "(plan gratuito), que puede usarlo para mejorar sus modelos. Es un "
-            "demo: no escribas datos reales de salud.",
-            icon="🔒",
+        # A caption, not a banner: the disclosure matters, but two full-width
+        # coloured banners before any content buried the interview itself.
+        st.caption(
+            f"Motor de entrevista: {engine_label(interviewer())}. Tus respuestas se "
+            "envían a Google (plan gratuito), que puede usarlas para mejorar sus "
+            "modelos; no escribas datos reales de salud."
         )
     else:
         # A missing key is a loud state, not a silent downgrade: the demo still
@@ -302,7 +308,7 @@ def main() -> None:
             "**Los visitantes no necesitan aportar ninguna key.**",
             icon="🔑",
         )
-    st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
+        st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
 
     if st.session_state.get("emergency"):
         st.error(EMERGENCY_MESSAGE, icon="🚑")
@@ -314,7 +320,7 @@ def main() -> None:
     st.divider()
 
     for role, text in st.session_state.messages:
-        with st.chat_message(role):
+        with st.chat_message(role, avatar="🫀" if role == "assistant" else None):
             st.markdown(text)
 
     if st.session_state.get("emergency"):

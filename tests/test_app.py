@@ -14,9 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from streamlit.runtime.secrets import Secrets
 from streamlit.testing.v1 import AppTest
 
-from heartrisk import llm as llm_module
 from heartrisk.artifact import ARTIFACT_PATH
 from heartrisk.schema import ASKABLE_FIELDS, FIELDS
 
@@ -68,22 +68,22 @@ ANSWERS = {
 def hermetic_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the suite off the network even though a real secrets.toml exists.
 
-    The app reads the deployment's key from `.streamlit/secrets.toml`, which is
-    right in production and wrong in tests: a live turn spends quota, needs the
-    network, and makes the conversation non-deterministic. Dropping the env var
-    was not enough once the credential moved into secrets, which is how these
-    tests started calling the real API.
+    Two things need neutralising, and only the first one is obvious:
+
+    1. The environment variable, in case this machine exports one.
+    2. The secrets file itself. Streamlit **promotes every entry of
+       ``.streamlit/secrets.toml`` into ``os.environ``** when the app reads
+       ``st.secrets`` (``Secrets._maybe_set_environment_variable``), and the app
+       reads them one line before it builds the interviewer. Deleting the variable
+       was therefore useless: the key came back into the environment a step later
+       and the next turn spent real API quota. Emptying ``Secrets._parse`` stops
+       both the leak and the promotion.
 
     The environment variable is still honoured, so the one test about a configured
     key keeps exercising the real resolution path.
     """
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    real_resolve = llm_module.resolve_api_key
-    monkeypatch.setattr(
-        llm_module,
-        "resolve_api_key",
-        lambda secrets=None, env=None: real_resolve(None, env),
-    )
+    monkeypatch.setattr(Secrets, "_parse", lambda self: {})
 
 
 def start() -> AppTest:
@@ -149,12 +149,31 @@ def test_the_greeting_is_shown_exactly_once() -> None:
     same helper that appends the turn, so a visitor saw the greeting twice.
     """
     app = start()
-    spoken = [element.value for element in app.markdown]
+    spoken = " ".join(element.value for element in app.markdown)
 
-    greetings = [text for text in spoken if text.startswith("¡Hola!")]
-    questions = [text for text in spoken if text.startswith("¿Cuántos años")]
-    assert len(greetings) == 1
-    assert len(questions) == 1
+    assert spoken.count("¡Hola!") == 1
+    assert spoken.count("¿Cuántos años tienes?") == 1
+
+
+def test_the_opening_is_one_single_message() -> None:
+    """One bubble per turn. Three bubbles with three avatars read as three speakers."""
+    app = start()
+    bubbles = [element.value for element in app.markdown]
+
+    assert len(bubbles) == 1, bubbles
+    assert "\n\n" in bubbles[0]
+
+
+def test_a_turn_adds_one_user_bubble_and_one_assistant_bubble() -> None:
+    """The assistant answers in one bubble, however many lines it produced."""
+    app = start()
+
+    say(app, "54")
+
+    bubbles = [element.value for element in app.markdown]
+    assert len(bubbles) == 3, bubbles  # opening, the answer, the reply
+    assert bubbles[1] == "54"
+    assert "¿Cuál es tu sexo?" in bubbles[2]
 
 
 def test_an_answer_advances_to_the_next_question() -> None:
