@@ -41,6 +41,7 @@ from .schema import (
     Field,
     SchemaError,
     derive_bmi,
+    rejection_message,
     validate_value,
 )
 from .text import normalise, parse_number, parse_numbers, tokens_of
@@ -300,7 +301,12 @@ def parse_answer(field: Field, text: str) -> object:
     else:  # pragma: no cover - the contract only declares the kinds above
         raise SchemaError(f"{field.name}: unsupported kind {field.kind!r}")
 
-    validate_value(field, value)
+    try:
+        validate_value(field, value)
+    except SchemaError as exc:
+        # The contract's message is for whoever maintains the pipeline; the person
+        # who just typed the value needs the same rule stated in Spanish.
+        raise SchemaError(rejection_message(field, value)) from exc
     return value
 
 

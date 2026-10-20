@@ -9,9 +9,11 @@ last, small, and worded so it cannot be read as a diagnosis. When the interview
 did not collect enough to say anything, no verdict is shown at all and the screen
 lists what the person could go and get measured instead.
 
-Colours come from ``.streamlit/config.toml``, sampled from screenshots of the
-Algorithmics course page. The typeface needs one style block because Streamlit's
-``[theme] fontFaces`` requires pinned font-file URLs; see ``FONT_STYLE``.
+Colours and the typeface come from ``.streamlit/config.toml``, sampled from
+screenshots of the Algorithmics course page. Nothing is injected as raw HTML: a
+blanket CSS override broad enough to set the page font also replaces the icon font
+Streamlit ships locally, which is what once broke every Material icon in the
+interface. See ``tests/test_ui.py``.
 """
 
 from __future__ import annotations
@@ -42,18 +44,6 @@ DISCLAIMER = (
     "dispositivo médico y no diagnostica nada.** Si tienes síntomas o dudas sobre "
     "tu salud, consulta a un médico."
 )
-
-#: The heading family is an INFERENCE from the screenshots, not a measured value.
-#: Streamlit's [theme] fontFaces wants pinned font-file URLs, so the family is
-#: pulled from Google Fonts here instead: the single place theming cannot express
-#: what we need.
-FONT_STYLE = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap');
-html, body, [class*="st-"] { font-family: 'Nunito', system-ui, sans-serif; }
-h1, h2, h3, h4 { font-family: 'Nunito', system-ui, sans-serif; font-weight: 800; }
-</style>
-"""
 
 CONFIDENCE_LABEL = {
     Confidence.NONE: "sin veredicto",
@@ -136,15 +126,18 @@ def start_interview() -> None:
 
     The interviewer is built from the deployment's secrets, so a visitor brings no
     credential of their own.
+
+    The opening lines are added only by ``apply_turn``. An earlier version also
+    pre-filled ``messages`` from the same turn, so the greeting was appended twice
+    and a visitor read it twice.
     """
     state = InterviewState()
     st.session_state.interviewer = build_interviewer(secrets=secret_map())
-    turn = interviewer().opening()
-    st.session_state.messages = [("assistant", line) for line in turn.messages]
     st.session_state.interview = state
+    st.session_state.messages = []
     st.session_state.result = None
     st.session_state.emergency = False
-    apply_turn(turn)
+    apply_turn(interviewer().opening())
 
 
 def apply_turn(turn: Turn) -> None:
@@ -275,7 +268,8 @@ def main() -> None:
         page_icon="🫀",
         layout="centered",
     )
-    st.markdown(FONT_STYLE, unsafe_allow_html=True)
+    # The typeface is configured natively in .streamlit/config.toml, so this file
+    # never injects raw HTML.
     st.error(DISCLAIMER, icon="⚠️")
 
     st.title("Riesgo cardíaco")

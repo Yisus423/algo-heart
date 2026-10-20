@@ -151,6 +151,18 @@ def test_an_impossible_number_is_rejected_and_the_field_is_re_asked() -> None:
     assert turn.asking == "age"
 
 
+def test_the_rejection_is_explained_for_the_person_not_for_the_developer() -> None:
+    """SchemaError text is English, because whoever maintains the pipeline reads it."""
+    interviewer = StubInterviewer()
+    state = InterviewState(pending="age")
+
+    turn = interviewer.respond("500", state)
+
+    joined = " ".join(turn.messages)
+    assert "plausible maximum" not in joined
+    assert "fuera del rango razonable" in joined
+
+
 def test_an_unrecognised_category_is_rejected_and_the_field_is_re_asked() -> None:
     interviewer = StubInterviewer()
     state = InterviewState(pending="smoker_status")

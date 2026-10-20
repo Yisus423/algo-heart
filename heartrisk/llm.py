@@ -49,12 +49,18 @@ from .schema import (
     FIELDS_BY_NAME,
     Field,
     SchemaError,
+    rejection_message,
     to_native,
     validate_value,
 )
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 API_KEY_ENV = "GEMINI_API_KEY"
+
+#: Said by the app, not by the model. Gemini returns no text alongside a tool
+#: call, so leaving the acknowledgement to it produced a mute interviewer, and
+#: asking it for a sentence produced a second question in a different register.
+ACKNOWLEDGEMENT = "Anotado, gracias."
 
 #: Accepted spellings, looked up in order. Streamlit's own documentation uses the
 #: upper-case form; Python developers tend to write the lower-case one.
@@ -73,11 +79,16 @@ TOOL_DESCRIPTION = (
 SYSTEM_PROMPT = (
     "Eres el entrevistador de un demo académico que estima riesgo cardíaco con un "
     "modelo entrenado sobre datos SINTÉTICOS.\n\n"
-    "Tu tarea es entender lo que la persona escribe y reportarlo con la función "
-    f"`{TOOL_NAME}`. No decides qué preguntar: el sistema te da la próxima "
-    "pregunta y tú la formulas de forma natural.\n\n"
+    "Tu única tarea es entender lo que la persona escribe y reportarlo con la "
+    f"función `{TOOL_NAME}`.\n\n"
+    "El sistema ya le muestra a la persona la próxima pregunta y reconoce los "
+    "datos que registraste. Por eso NO preguntes nada, no pidas ningún dato y "
+    "no agregues texto de relleno: devuelve un texto vacío, salvo que tengas "
+    "algo concreto que aclarar, en una frase corta.\n\n"
     "Reglas:\n"
-    "- Hablas en español neutro, sin voseo, breve y cálido. Una o dos frases.\n"
+    "- Hablas en español neutro y tratas a la persona de 'tú': nunca 'usted' y "
+    "nunca voseo. Breve y cálido: una frase.\n"
+    "- No hagas preguntas de ningún tipo.\n"
     "- Nunca inventes un valor. Si la persona no dijo algo, no lo reportes.\n"
     "- Si dijo algo aproximado ('como 95 kilos', 'más o menos 3000 pasos'), "
     "reporta el número que dio.\n"
@@ -160,6 +171,24 @@ def build_answer_tool() -> dict[str, object]:
     }
 
 
+def _response_text(response: object) -> str:
+    """Read the text parts of a response that also carries a tool call.
+
+    The SDK's ``response.text`` helper logs a warning and concatenates only the
+    text parts whenever the response contains anything else — which is every reply
+    that calls the tool. Reading the parts directly keeps the console clean and
+    makes the intent explicit.
+    """
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return ""
+    content = getattr(candidates[0], "content", None)
+    parts = getattr(content, "parts", None) or []
+    return " ".join(
+        part.text for part in parts if getattr(part, "text", None)
+    ).strip()
+
+
 class GeminiTransport:
     """``google-genai`` implementation of :class:`Transport`.
 
@@ -208,7 +237,7 @@ class GeminiTransport:
         for call in response.function_calls or []:
             if call.name == TOOL_NAME and call.args:
                 arguments.update(dict(call.args))
-        return ModelReply(text=(response.text or "").strip(), arguments=arguments)
+        return ModelReply(text=_response_text(response), arguments=arguments)
 
 
 class GeminiInterviewer:
@@ -237,7 +266,7 @@ class GeminiInterviewer:
         if reply.text:
             self._transcript.append({"role": "model", "parts": [{"text": reply.text}]})
 
-        rejected = self._store(reply.arguments, state)
+        rejected, registered = self._store(reply.arguments, state)
 
         if pending is not None and pending.name not in state.attempted:
             if is_skip(text):
@@ -248,7 +277,8 @@ class GeminiInterviewer:
                 except SchemaError:
                     pass
 
-        messages = [reply.text] if reply.text else []
+        spoken = reply.text or (ACKNOWLEDGEMENT if registered else "")
+        messages = [spoken] if spoken else []
         if rejected:
             messages.append(
                 "No pude usar alguno de esos valores, así que no los guardé: "
@@ -275,13 +305,17 @@ class GeminiInterviewer:
 
     def _store(
         self, arguments: dict[str, object], state: InterviewState
-    ) -> list[str]:
+    ) -> tuple[list[str], int]:
         """Validate reported values and keep only the ones the contract accepts.
 
         A rejected value is reported back to the user rather than dropped in
         silence, because a silent drop looks like the program ignored them.
+
+        Returns the rejection messages and how many values were kept, the latter
+        so the caller can acknowledge only what was actually registered.
         """
         rejected: list[str] = []
+        stored = 0
         for name, value in arguments.items():
             contract_field = FIELDS_BY_NAME.get(name)
             if contract_field is None or contract_field.computed_from:
@@ -291,11 +325,12 @@ class GeminiInterviewer:
             native = to_native(value)
             try:
                 validate_value(contract_field, native)
-            except SchemaError as exc:
-                rejected.append(str(exc))
+            except SchemaError:
+                rejected.append(rejection_message(contract_field, native))
                 continue
             state.answers[name] = native
-        return rejected
+            stored += 1
+        return rejected, stored
 
 
 def _lookup(sources: list[object], names: tuple[str, ...]) -> str | None:

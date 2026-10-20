@@ -428,6 +428,28 @@ def derive_bmi(weight_kg: float, height_cm: float) -> float:
     return weight_kg / (height_cm / 100) ** 2
 
 
+def rejection_message(field: Field, value: object) -> str:
+    """Neutral Spanish rendering of why a value was refused, written for the person.
+
+    ``SchemaError`` messages are English because the pipeline developer reads them
+    and the tests assert on them. They must not reach the screen: echoing one
+    produced "No pude usar alguno de esos valores: cholesterol_total: 900 is above
+    the plausible maximum 700", half Spanish and half developer.
+    """
+    is_number = isinstance(value, Real) and not isinstance(value, bool)
+    if is_number and field.minimum is not None and field.maximum is not None:
+        if not field.minimum <= float(value) <= field.maximum:
+            unit = f" {field.unit_es}" if field.unit_es else ""
+            return (
+                f"{field.label_es}: {value:g}{unit} está fuera del rango razonable "
+                f"({field.minimum:g}-{field.maximum:g}{unit})."
+            )
+    # No trailing "no lo guardé" here: the caller's sentence already says it, and
+    # repeating it produced "... así que no los guardé: X: fuera de rango, así que
+    # no lo guardé."
+    return f"{field.label_es}: no pude usar ese valor."
+
+
 def validate_value(field: Field, value: object) -> None:
     """Raise ``SchemaError`` unless ``value`` is acceptable for ``field``.
 

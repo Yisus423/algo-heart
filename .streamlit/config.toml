@@ -16,5 +16,36 @@ borderColor = "#E8ECF0"
 baseRadius = "0.75rem"
 showSidebarBorder = false
 
+# The heading family is an INFERENCE from those screenshots, not a measured
+# token: Nunito is a close match for the heavy geometric sans in the reference.
+#
+# These keys must stay above the [[theme.fontFaces]] tables. In TOML, a key after
+# an array-of-tables header belongs to that array element, not to [theme], so
+# putting them lower would silently stop applying them.
+font = "Nunito, sans-serif"
+headingFont = "Nunito, sans-serif"
+
+# The font is declared here, as @font-face rules Streamlit builds itself, rather
+# than injected as a CSS rule. An earlier version did it with
+# `st.markdown("<style>... [class*=\"st-\"] { font-family: ... } ...")`, and that
+# selector also matched Streamlit's own icon elements, replacing the
+# "Material Symbols Rounded" font it ships locally and breaking every Material
+# icon in the interface. See L33 in odd/tasks/heart-risk-chat-demo.md, and
+# tests/test_ui.py, which stops it from coming back.
+#
+# These are the variable-font files, so one file covers the whole weight range
+# instead of one file per weight.
+[[theme.fontFaces]]
+family = "Nunito"
+url = "https://fonts.gstatic.com/s/nunito/v31/XRXV3I6Li01BKofINeaBTMnFcQ.woff2"
+style = "normal"
+weight = "200 1000"
+
+[[theme.fontFaces]]
+family = "Nunito"
+url = "https://fonts.gstatic.com/s/nunito/v31/XRXX3I6Li01BKofIMNaDRs7nczIH.woff2"
+style = "italic"
+weight = "200 1000"
+
 [server]
 headless = true

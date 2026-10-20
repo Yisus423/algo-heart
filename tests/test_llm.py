@@ -13,6 +13,7 @@ import pytest
 from heartrisk.interview import InterviewState, Turn
 from heartrisk.llm import (
     DEFAULT_MODEL,
+    SYSTEM_PROMPT,
     GeminiInterviewer,
     ModelReply,
     build_answer_tool,
@@ -244,6 +245,55 @@ def test_the_opening_does_not_need_the_network() -> None:
 
     assert turn.asking is not None
     assert transport.calls == []
+
+
+def test_the_model_is_told_not_to_ask_its_own_questions() -> None:
+    """The app appends the contract's question, so a model question duplicates it.
+
+    On screen it read as two different questions in two different registers:
+    "Entendido. ¿Cuál es su sexo?" followed by "¿Cuál es tu sexo?"
+    """
+    assert "NO preguntes nada" in SYSTEM_PROMPT
+
+
+def test_the_model_is_told_the_app_reports_the_data() -> None:
+    """Gemini returns no text alongside a tool call, so the app acknowledges.
+
+    Leaving it to the model produced a mute interviewer, and asking it for a
+    sentence produced a second question in a different register.
+    """
+    assert "reconoce los datos que registraste" in SYSTEM_PROMPT
+    assert "devuelve un texto vacío" in SYSTEM_PROMPT
+
+
+def test_the_app_acknowledges_when_the_model_returns_no_text() -> None:
+    transport = FakeTransport([ModelReply(arguments={"age": 62})])
+    interviewer, state, _ = start(transport)
+
+    turn = interviewer.respond("tengo 62", state)
+
+    assert any("Anotado" in message for message in turn.messages)
+
+
+def test_nothing_is_acknowledged_when_no_value_was_registered() -> None:
+    transport = FakeTransport([ModelReply()])
+    interviewer, state, _ = start(transport)
+
+    turn = interviewer.respond("no sé", state)
+
+    assert not any("Anotado" in message for message in turn.messages)
+
+
+def test_a_rejected_value_is_explained_in_spanish_not_in_developer_english() -> None:
+    """A SchemaError is written for whoever maintains the pipeline, not for the user."""
+    transport = FakeTransport([ModelReply(arguments={"age": 500})])
+    interviewer, state, _ = start(transport)
+
+    turn = interviewer.respond("tengo 500 años", state)
+
+    report = " ".join(turn.messages)
+    assert "plausible maximum" not in report
+    assert "fuera del rango razonable" in report
 
 
 def test_the_model_receives_the_tool_and_the_system_prompt() -> None:

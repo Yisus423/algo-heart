@@ -111,9 +111,14 @@ def test_the_emergency_message_names_no_argentina_only_number() -> None:
 
 
 def test_the_model_is_told_which_register_to_write_in() -> None:
-    """The language model writes most of the visible copy, so it is told the rule."""
+    """The language model writes most of the visible copy, so it is told the rule.
+
+    Without an explicit instruction it defaults to 'usted', which then clashes with
+    the contract's own questions that address the person as 'tú'.
+    """
     assert "español neutro" in SYSTEM_PROMPT
-    assert "sin voseo" in SYSTEM_PROMPT
+    assert "nunca voseo" in SYSTEM_PROMPT
+    assert "nunca 'usted'" in SYSTEM_PROMPT
 
 
 def test_no_question_uses_the_rioplatense_imperative() -> None:

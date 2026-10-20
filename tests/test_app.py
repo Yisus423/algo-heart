@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from heartrisk import llm as llm_module
 from heartrisk.artifact import ARTIFACT_PATH
 from heartrisk.schema import ASKABLE_FIELDS, FIELDS
 
@@ -64,14 +65,25 @@ ANSWERS = {
 
 
 @pytest.fixture(autouse=True)
-def deterministic_engine(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the app tests off the network and off the free tier.
+def hermetic_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite off the network even though a real secrets.toml exists.
 
-    ``build_interviewer`` prefers Gemini whenever the key is set, so without this
-    the suite would call a real API from a machine that happens to export the
-    variable, and would spend quota to test the app shell.
+    The app reads the deployment's key from `.streamlit/secrets.toml`, which is
+    right in production and wrong in tests: a live turn spends quota, needs the
+    network, and makes the conversation non-deterministic. Dropping the env var
+    was not enough once the credential moved into secrets, which is how these
+    tests started calling the real API.
+
+    The environment variable is still honoured, so the one test about a configured
+    key keeps exercising the real resolution path.
     """
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    real_resolve = llm_module.resolve_api_key
+    monkeypatch.setattr(
+        llm_module,
+        "resolve_api_key",
+        lambda secrets=None, env=None: real_resolve(None, env),
+    )
 
 
 def start() -> AppTest:
@@ -128,6 +140,21 @@ def test_the_interview_speaks_first() -> None:
     app = start()
 
     assert "¿Cuántos años tienes?" in visible_text(app)
+
+
+def test_the_greeting_is_shown_exactly_once() -> None:
+    """The opening lines are added by one code path, not two.
+
+    `start_interview` used to pre-fill the history from the turn and then call the
+    same helper that appends the turn, so a visitor saw the greeting twice.
+    """
+    app = start()
+    spoken = [element.value for element in app.markdown]
+
+    greetings = [text for text in spoken if text.startswith("¡Hola!")]
+    questions = [text for text in spoken if text.startswith("¿Cuántos años")]
+    assert len(greetings) == 1
+    assert len(questions) == 1
 
 
 def test_an_answer_advances_to_the_next_question() -> None:
