@@ -31,6 +31,7 @@ Environment: ``GEMINI_API_KEY``. Model: ``gemini-2.5-flash`` unless overridden.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -40,6 +41,7 @@ from .interview import (
     StubInterviewer,
     Turn,
     emergency_turn,
+    batch_question,
     is_skip,
     parse_answer,
     question_for,
@@ -67,8 +69,8 @@ ACKNOWLEDGEMENT = "Anotado, gracias."
 #: text part at all, so the phrasing cannot ride along with the extraction.
 PHRASING_PROMPT = (
     "Reformulas preguntas para una persona, en español neutro y tratándola de "
-    "'tú'. Devuelves únicamente la pregunta reformulada, en una sola frase corta y "
-    "cálida, sin responderla y sin agregar nada más."
+    "'tú'. Pueden ser una o varias. Devuelves únicamente el mensaje con las "
+    "preguntas, corto y cálido, sin responderlas y sin agregar nada más."
 )
 
 #: Accepted spellings, looked up in order. Streamlit's own documentation uses the
@@ -264,8 +266,25 @@ class GeminiInterviewer:
         self._fallback = StubInterviewer()
 
     def opening(self) -> Turn:
-        """The deterministic first turn, so startup never waits on the network."""
-        return self._fallback.opening()
+        """The free-form invitation, which only this interviewer can act on.
+
+        The stub cannot use it: turning "tengo 62, peso 95 y fumo" into three fields
+        takes understanding, so the deterministic interviewer opens with its first
+        question instead. Here it is the whole point, because it is what makes the
+        interview two turns long for somebody who writes, instead of twenty-five.
+
+        It makes no network call, so startup never waits on the model.
+        """
+        return Turn(
+            messages=(
+                "¡Hola! Soy el asistente de este demo.",
+                "Cuéntame lo que sepas de ti: tu edad, tus hábitos, y si tienes "
+                "análisis a mano, los números. Puedes escribirlo todo junto y en el "
+                "orden que quieras.",
+                "Si algo no lo sabes, dime \"no sé\" y seguimos. Y cuando quieras "
+                "cortar, escribe \"listo\".",
+            )
+        )
 
     def respond(self, text: str, state: InterviewState) -> Turn:
         emergency = emergency_turn(text)
@@ -273,7 +292,7 @@ class GeminiInterviewer:
             return emergency
 
         self._transcript.append({"role": "user", "parts": [{"text": text}]})
-        pending = FIELDS_BY_NAME.get(state.pending) if state.pending else None
+        pending = FIELDS_BY_NAME.get(state.pending[0]) if state.pending else None
 
         try:
             reply = self._transport.generate(
@@ -306,39 +325,42 @@ class GeminiInterviewer:
         if pending is not None and pending.name not in state.attempted:
             # Neither the model nor the fallback parser resolved the field that was
             # asked, so ask it again rather than moving on and losing it.
-            state.pending = pending.name
+            state.pending = (pending.name,)
             messages.append(f"Perdón, de nuevo: {question_for(pending)}")
-            return Turn(messages=tuple(messages), asking=pending.name)
+            return Turn(messages=tuple(messages), asking=(pending.name,))
 
-        following = state.next_field()
-        if following is None:
-            state.pending = None
+        following = state.next_batch()
+        if not following:
+            state.pending = ()
             state.finished = True
             messages.append("Perfecto, con esto ya puedo calcular el resultado.")
             return Turn(messages=tuple(messages), complete=True)
 
-        state.pending = following.name
+        # The contract decided which fields are worth asking; the model decides how
+        # to ask them, and a batch of them arrives as a single message.
+        state.pending = tuple(f.name for f in following)
         if registered or rejected:
             messages.append(ACKNOWLEDGEMENT)
-        # The contract decided which field to ask; the model decides how to ask it.
-        messages.append(self._phrase(question_for(following)))
-        return Turn(messages=tuple(messages), asking=following.name)
+        messages.append(self._phrase(following))
+        return Turn(messages=tuple(messages), asking=state.pending)
 
-    def _phrase(self, question: str) -> str:
-        """Put the contract's question in the model's words, in its own call.
+    def _phrase(self, fields: Sequence[Field]) -> str:
+        """Put the contract's questions in the model's words, in their own call.
 
-        Separate because Gemini returns no text alongside a tool call. If it fails
-        or comes back empty the contract's own wording is used, so the interview
-        never leaves the person without a question to answer.
+        Separate because Gemini returns no text alongside a tool call. If it fails,
+        or comes back without a question mark, the contract's own wording is used, so
+        the interview never leaves the person with nothing to answer.
         """
         try:
-            # The instruction has to be explicit that this is a question to ask of
-            # someone else. Sending the bare question as a user turn made the model
-            # read it as being addressed to itself: asked to rephrase "¿Cuál es tu
-            # sexo?" it answered "¿Cómo te gustaría que me identificara?".
+            # The instruction must be explicit that these are questions to ask of
+            # someone else. Sending a bare question as a user turn made the model
+            # read it as addressed to itself: asked to rephrase "¿Cuál es tu sexo?"
+            # it answered "¿Cómo te gustaría que me identificara?".
+            questions = "\n".join(f"- {question_for(f, hint=False)}" for f in fields)
             instruction = (
-                "Reformula esta pregunta para hacérsela a la persona, sin "
-                f"responderla:\n\n{question}"
+                "Hazle estas preguntas a la persona, todas juntas en un solo "
+                "mensaje, sin responderlas, y cierra recordándole una sola vez que "
+                f"puede decir \"no sé\" si no las sabe:\n\n{questions}"
             )
             reply = self._transport.generate(
                 PHRASING_PROMPT,
@@ -346,17 +368,17 @@ class GeminiInterviewer:
                 None,
             )
         except Exception:
-            return question
+            return batch_question(fields)
         phrased = reply.text.strip()
-        return phrased if "?" in phrased else question
+        return phrased if "?" in phrased else batch_question(fields)
 
     def _offline_turn(
         self, text: str, state: InterviewState, pending: Field | None
     ) -> Turn:
         """Keep the interview moving when the model cannot be reached at all.
 
-        The deterministic parser still handles the field being asked, so the
-        answer is not lost, and the person is told plainly that the model is down.
+        The deterministic parser still handles the field being asked, so the answer
+        is not lost, and the person is told plainly that the model is down.
         """
         if pending is not None and pending.name not in state.attempted:
             if is_skip(text):
@@ -373,20 +395,24 @@ class GeminiInterviewer:
         ]
 
         if pending is not None and pending.name not in state.attempted:
-            state.pending = pending.name
+            state.pending = (pending.name,)
             messages.append(f"Perdón, de nuevo: {question_for(pending)}")
-            return Turn(messages=tuple(messages), asking=pending.name)
+            return Turn(messages=tuple(messages), asking=(pending.name,))
 
+        # One question at a time here, not a batch: only the model can match several
+        # free-text answers to several questions, and the deterministic parser would
+        # file "62" under whichever field it happened to try. Slower and correct
+        # beats fast and wrong.
         following = state.next_field()
         if following is None:
-            state.pending = None
+            state.pending = ()
             state.finished = True
             messages.append("Con esto ya puedo calcular el resultado.")
             return Turn(messages=tuple(messages), complete=True)
 
-        state.pending = following.name
+        state.pending = (following.name,)
         messages.append(question_for(following))
-        return Turn(messages=tuple(messages), asking=following.name)
+        return Turn(messages=tuple(messages), asking=(following.name,))
 
     def _store(
         self, arguments: dict[str, object], state: InterviewState

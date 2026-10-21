@@ -35,16 +35,17 @@ def run_interview(
     state.pending = turn.asking
     asked: list[str] = []
     if turn.asking:
-        asked.append(turn.asking)
+        asked.extend(turn.asking)
 
     guard = 0
     while not turn.complete:
         guard += 1
         assert guard < 200, "interview did not terminate"
-        reply = (answers or {}).get(turn.asking or "", default)
+        first = turn.asking[0] if turn.asking else ""
+        reply = (answers or {}).get(first, default)
         turn = interviewer.respond(reply, state)
         if turn.asking:
-            asked.append(turn.asking)
+            asked.extend(turn.asking)
     return state, asked, turn
 
 
@@ -55,22 +56,32 @@ def test_the_opening_greets_and_asks_the_first_question() -> None:
     turn = StubInterviewer().opening()
 
     assert len(turn.messages) > 1
-    assert turn.asking == ASKABLE_ORDER[0]
+    assert turn.asking == (ASKABLE_ORDER[0],)
     assert not turn.complete
 
 
-def test_askable_fields_are_all_asked_before_any_measurement() -> None:
+def test_the_core_questions_come_before_the_core_measurements() -> None:
+    """The interview never opens by asking for a stress-test value."""
+    from heartrisk.schema import CORE_FIELDS, FIELDS_BY_NAME
+
     _, asked, _ = run_interview()
 
-    first_asked = [name for name in asked[: len(ASKABLE_ORDER)]]
-    assert first_asked == ASKABLE_ORDER
+    core_in_order = [name for name in asked if name in set(CORE_FIELDS)]
+    askable = [n for n in core_in_order if FIELDS_BY_NAME[n].askable]
+    measured = [n for n in core_in_order if not FIELDS_BY_NAME[n].askable]
+    assert core_in_order == askable + measured
+    assert asked[0] == "age"
 
 
-def test_the_interview_asks_every_contract_field_once() -> None:
-    state, _, turn = run_interview()
+def test_the_interview_asks_only_the_core_and_then_stops() -> None:
+    """Chasing all twenty-five was the tedium the user called out."""
+    from heartrisk.schema import CORE_FIELDS
+
+    state, asked, turn = run_interview()
 
     assert turn.complete
-    assert len(state.attempted) == len(FIELDS)
+    assert state.attempted == set(CORE_FIELDS)
+    assert len(asked) == len(CORE_FIELDS)
 
 
 def test_answering_only_what_a_person_knows_clears_the_coverage_floor() -> None:
@@ -105,7 +116,7 @@ def test_the_usual_ways_of_not_knowing_count_as_a_skip(text: str) -> None:
 @pytest.mark.parametrize("text", ["listo", "Ya está", "terminemos", "es todo"])
 def test_the_usual_ways_of_stopping_end_the_interview(text: str) -> None:
     interviewer = StubInterviewer()
-    state = InterviewState(pending="age")
+    state = InterviewState(pending=("age",))
 
     turn = interviewer.respond(text, state)
 
@@ -132,29 +143,29 @@ def test_stopping_early_keeps_the_answers_already_given() -> None:
 
 def test_an_answer_without_a_number_is_rejected_and_the_field_is_re_asked() -> None:
     interviewer = StubInterviewer()
-    state = InterviewState(pending="age")
+    state = InterviewState(pending=("age",))
 
     turn = interviewer.respond("y... muchos años, che", state)
 
     assert "age" not in state.answers
-    assert turn.asking == "age"
+    assert turn.asking == ("age",)
     assert not turn.complete
 
 
 def test_an_impossible_number_is_rejected_and_the_field_is_re_asked() -> None:
     interviewer = StubInterviewer()
-    state = InterviewState(pending="age")
+    state = InterviewState(pending=("age",))
 
     turn = interviewer.respond("500", state)
 
     assert "age" not in state.answers
-    assert turn.asking == "age"
+    assert turn.asking == ("age",)
 
 
 def test_the_rejection_is_explained_for_the_person_not_for_the_developer() -> None:
     """SchemaError text is English, because whoever maintains the pipeline reads it."""
     interviewer = StubInterviewer()
-    state = InterviewState(pending="age")
+    state = InterviewState(pending=("age",))
 
     turn = interviewer.respond("500", state)
 
@@ -165,17 +176,17 @@ def test_the_rejection_is_explained_for_the_person_not_for_the_developer() -> No
 
 def test_an_unrecognised_category_is_rejected_and_the_field_is_re_asked() -> None:
     interviewer = StubInterviewer()
-    state = InterviewState(pending="smoker_status")
+    state = InterviewState(pending=("smoker_status",))
 
     turn = interviewer.respond("depende del día", state)
 
     assert "smoker_status" not in state.answers
-    assert turn.asking == "smoker_status"
+    assert turn.asking == ("smoker_status",)
 
 
 def test_a_missing_value_is_never_stored() -> None:
     interviewer = StubInterviewer()
-    state = InterviewState(pending="hdl")
+    state = InterviewState(pending=("hdl",))
 
     interviewer.respond("no sé", state)
 
@@ -239,8 +250,8 @@ def test_bmi_is_derived_from_the_weight_and_height_the_user_gives() -> None:
     state.pending = turn.asking
 
     interviewer.respond("40", state)
-    turn = interviewer.respond("Male", state)
-    assert turn.asking == "bmi", "bmi follows age and sex in the askable order"
+    turn = interviewer.respond("no", state)  # angina de esfuerzo, the second question
+    assert turn.asking == ("bmi",), "bmi is the third core question"
 
     interviewer.respond("82 kg y 175 cm", state)
 
@@ -249,12 +260,12 @@ def test_bmi_is_derived_from_the_weight_and_height_the_user_gives() -> None:
 
 def test_bmi_is_re_asked_when_only_one_of_the_two_values_arrives() -> None:
     interviewer = StubInterviewer()
-    state = InterviewState(pending="bmi")
+    state = InterviewState(pending=("bmi",))
 
     turn = interviewer.respond("82 kilos", state)
 
     assert "bmi" not in state.answers
-    assert turn.asking == "bmi"
+    assert turn.asking == ("bmi",)
 
 
 def test_an_impossible_bmi_is_rejected() -> None:
@@ -270,6 +281,16 @@ def test_a_lab_value_is_never_asked_as_if_it_were_common_knowledge() -> None:
 
     assert "análisis de sangre" in question
     assert "no sé" in question
+
+
+def test_a_batch_does_not_repeat_the_hint_after_every_question() -> None:
+    """One closing reminder, not three apologies."""
+    from heartrisk.interview import batch_question
+
+    joined = batch_question([FIELDS_BY_NAME["age"], FIELDS_BY_NAME["bmi"]])
+
+    assert joined.count("no sé") == 1
+    assert joined.endswith('Si algo no lo sabes, dime "no sé" y seguimos.')
 
 
 def test_a_lifestyle_question_does_not_mention_a_measurement() -> None:

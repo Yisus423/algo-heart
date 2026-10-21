@@ -396,6 +396,53 @@ ASKABLE_FIELDS: tuple[str, ...] = tuple(f.name for f in FIELDS if f.askable)
 MEASUREMENT_FIELDS: tuple[str, ...] = tuple(f.name for f in FIELDS if not f.askable)
 
 
+#: Fields ordered by how much each one contributes to the model, measured on the
+#: full release with a 300-tree forest's feature importances and read as a top-k
+#: curve at the artifact's recall target:
+#:
+#:     top 4    recall 0.850   precision 0.616   PR-AUC 0.825
+#:     top 8    recall 0.850   precision 0.719   PR-AUC 0.880
+#:     all 25   recall 0.852   precision 0.734   PR-AUC 0.887
+#:
+#: Eight fields carry 98% of what twenty-five do. Three of them are close to
+#: worthless *as questions* — ``sex`` 0.61%, ``family_history`` 0.48%,
+#: ``wearable_owner`` 0.35% — which is why asking whether someone owns a smartwatch
+#: was buying a third of a percent with a whole turn. A test fails if a field is
+#: added to the contract without a place in this order.
+IMPORTANCE_ORDER: tuple[str, ...] = (
+    "max_heart_rate_achieved",
+    "exercise_induced_angina",
+    "st_depression",
+    "age",
+    "ldl",
+    "hdl",
+    "bmi",
+    "exercise_minutes_per_week",
+    "resting_bp_systolic",
+    "hba1c",
+    "fasting_blood_sugar",
+    "cholesterol_total",
+    "diet_quality_score",
+    "stress_score",
+    "daily_steps",
+    "triglycerides",
+    "resting_heart_rate",
+    "alcohol_units_per_week",
+    "sleep_hours",
+    "resting_bp_diastolic",
+    "chest_pain_type",
+    "smoker_status",
+    "sex",
+    "family_history",
+    "wearable_owner",
+)
+
+#: The fields the interview actually chases. The rest are welcome and still reach
+#: the model, which keeps all thirty columns, but the interview does not demand
+#: them: seventeen more answers to gain 0.015 of precision is a questionnaire.
+CORE_FIELDS: tuple[str, ...] = IMPORTANCE_ORDER[:8]
+
+
 def _columns_for(field: Field) -> tuple[str, ...]:
     if field.kind == "categorical":
         return tuple(f"{field.name}={category}" for category in field.categories)

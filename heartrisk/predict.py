@@ -23,6 +23,7 @@ from enum import Enum
 import pandas as pd
 
 from .schema import (
+    CORE_FIELDS,
     FEATURE_ORDER,
     FIELDS,
     FIELDS_BY_NAME,
@@ -71,10 +72,16 @@ class Prediction:
             ``None`` the caller must not present ``probability`` as a risk
             figure; it is kept only so the UI can show a band.
         threshold: the artifact's cutoff, so the caller can explain the tradeoff.
-        coverage: real fields divided by contract fields.
+        coverage: core fields provided divided by core fields asked for.
+            Measured over the core rather than all twenty-five, because the
+            interview only chases eight and the other seventeen are worth a
+            combined sliver of the model. Counting them made a complete interview
+            read as 32%.
         confidence: band derived from ``coverage``.
         estimate_available: ``False`` below ``MIN_COVERAGE``.
-        provided: contract fields that came from real values.
+        provided: every contract field that came from a real value, including the
+            ones the person volunteered that the interview never asked for.
+        core_provided: the subset of ``provided`` the interview actually chases.
         imputed: contract fields filled in from the training distribution.
         missing_measurements: the subset of ``imputed`` that a doctor's visit
             would resolve, which is what the app tells the user to go get.
@@ -90,6 +97,7 @@ class Prediction:
     confidence: Confidence
     estimate_available: bool
     provided: tuple[str, ...]
+    core_provided: tuple[str, ...]
     imputed: tuple[str, ...]
     missing_measurements: tuple[str, ...]
     out_of_distribution: tuple[str, ...]
@@ -97,11 +105,17 @@ class Prediction:
 
     @property
     def provided_count(self) -> int:
-        return len(self.provided)
+        """How many of the fields the interview asks for are real."""
+        return len(self.core_provided)
 
     @property
     def total_count(self) -> int:
-        return len(FIELDS_BY_NAME)
+        return len(CORE_FIELDS)
+
+    @property
+    def beyond_core(self) -> tuple[str, ...]:
+        """Fields the person offered that the interview never asked for."""
+        return tuple(name for name in self.provided if name not in set(CORE_FIELDS))
 
     @property
     def is_out_of_distribution(self) -> bool:
@@ -210,7 +224,8 @@ def predict(payload: Mapping[str, object], artifact: Artifact) -> Prediction:
 
     provided = tuple(f.name for f in FIELDS if f.name in resolved)
     imputed = tuple(f.name for f in FIELDS if f.name not in resolved)
-    coverage = len(provided) / len(FIELDS)
+    core_provided = tuple(name for name in CORE_FIELDS if name in resolved)
+    coverage = len(core_provided) / len(CORE_FIELDS)
     confidence = _confidence_for(coverage)
     available = confidence is not Confidence.NONE
 
@@ -235,8 +250,11 @@ def predict(payload: Mapping[str, object], artifact: Artifact) -> Prediction:
         confidence=confidence,
         estimate_available=available,
         provided=provided,
+        core_provided=core_provided,
         imputed=imputed,
-        missing_measurements=tuple(n for n in MEASUREMENT_FIELDS if n not in resolved),
+        missing_measurements=tuple(
+            n for n in MEASUREMENT_FIELDS if n in set(CORE_FIELDS) and n not in resolved
+        ),
         out_of_distribution=out_of_distribution,
         schema_version=artifact.schema_version,
     )

@@ -27,7 +27,7 @@ from heartrisk.interview import InterviewState, Interviewer, Turn, question_for
 from heartrisk.llm import API_KEY_ENV, GeminiInterviewer, build_interviewer
 from heartrisk.predict import Confidence, Prediction, predict
 from heartrisk.safety import EMERGENCY_MESSAGE
-from heartrisk.schema import FIELDS, FIELDS_BY_NAME, source_group
+from heartrisk.schema import CORE_FIELDS, FIELDS_BY_NAME, source_group
 
 # Design tokens sampled from the course page that [theme] cannot express.
 DEEP_PURPLE = "#602B7A"
@@ -177,7 +177,7 @@ def apply_turn(turn: Turn) -> None:
         # model turn produced two of them, so the history stopped looking like a
         # conversation at all.
         st.session_state.messages.append(("assistant", spoken))
-    if turn.asking is not None:
+    if turn.asking:
         st.session_state.interview.pending = turn.asking
     if turn.complete:
         st.session_state.result = compute_result()
@@ -200,11 +200,16 @@ def render_band(result: Prediction) -> None:
     coverage_column, confidence_column = st.columns([2, 1])
     with coverage_column:
         st.metric(
-            "Campos con datos reales",
+            "Datos reales de los que pedimos",
             f"{result.provided_count} / {result.total_count}",
             help="Cada campo sin dato real se completa con un promedio del dataset.",
         )
         st.progress(result.coverage)
+        if result.beyond_core:
+            st.caption(
+                f"Y {len(result.beyond_core)} dato(s) más que aportaste y no pedimos: "
+                "cuentan para el resultado igual."
+            )
     with confidence_column:
         st.metric("Confianza", CONFIDENCE_LABEL[result.confidence])
 
@@ -308,8 +313,12 @@ def render_data_checklist(state: InterviewState) -> None:
     chat. Here the checklist stays visible and ticks itself while the chat keeps
     the room.
     """
+    # Only the core is listed. Twenty-five rows turned the checklist into a wall, and
+    # seventeen of those fields are not asked for anyway: they are accepted if the
+    # person brings them, which is what the caption at the end says.
+    core = [FIELDS_BY_NAME[name] for name in CORE_FIELDS]
     groups: dict[str, list[str]] = defaultdict(list)
-    for contract_field in FIELDS:
+    for contract_field in core:
         # Markdown task-list syntax, which Streamlit renders as real checkboxes.
         # A bullet plus my own "✓"/"○" produced a doubled marker ("• ○ Edad"), and
         # this is the checkbox the user asked for in the first place.
@@ -324,12 +333,20 @@ def render_data_checklist(state: InterviewState) -> None:
     # panel reads the same way every time.
     ordered = [FROM_MEMORY] + [g for g in groups if g != FROM_MEMORY]
 
+    provided = [f.name for f in core if f.name in state.answers]
+    beyond = [name for name in state.answers if name not in set(CORE_FIELDS)]
+
     with st.sidebar:
-        st.markdown(f"### Tus datos · {len(state.answers)} de {len(FIELDS_BY_NAME)}")
-        st.progress(len(state.answers) / len(FIELDS_BY_NAME))
+        st.markdown(f"### Tus datos · {len(provided)} de {len(core)}")
+        st.progress(len(provided) / len(core))
         for group in ordered:
             st.markdown(f"**{group}**")
             st.markdown("\n".join(groups[group]))
+        if beyond:
+            st.caption(
+                f"Y {len(beyond)} dato(s) más que aportaste sin que los pidiéramos: "
+                "cuentan para el resultado igual."
+            )
 
 
 def engine_label(active: Interviewer) -> str:
@@ -402,7 +419,7 @@ def main() -> None:
             st.session_state.emergency = False
             pending = st.session_state.interview.pending
             follow_up = (
-                question_for(FIELDS_BY_NAME[pending]) if pending else "Seguimos."
+                question_for(FIELDS_BY_NAME[pending[0]]) if pending else "Seguimos."
             )
             st.session_state.messages.append(("assistant", f"Listo. {follow_up}"))
             st.rerun()

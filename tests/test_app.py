@@ -18,7 +18,7 @@ from streamlit.runtime.secrets import Secrets
 from streamlit.testing.v1 import AppTest
 
 from heartrisk.artifact import ARTIFACT_PATH
-from heartrisk.schema import ASKABLE_FIELDS, FIELDS
+from heartrisk.schema import CORE_FIELDS, FIELDS, FIELDS_BY_NAME
 
 APP_PATH = str(Path(__file__).resolve().parents[1] / "app.py")
 
@@ -29,8 +29,14 @@ pytestmark = pytest.mark.skipif(
 
 #: The order the stub interviewer asks in: everything answerable from memory
 #: first, then the fields that only exist after a measurement.
-QUESTION_ORDER = [f.name for f in FIELDS if f.name in set(ASKABLE_FIELDS)] + [
-    f.name for f in FIELDS if f.name not in set(ASKABLE_FIELDS)
+#: The order the interview actually asks in: the core questions from memory with
+#: age first, then the core measurements. Everything else is only accepted if the
+#: person volunteers it, so it is never asked.
+CORE_ASKABLE = ["age"] + [
+    n for n in CORE_FIELDS if FIELDS_BY_NAME[n].askable and n != "age"
+]
+QUESTION_ORDER = CORE_ASKABLE + [
+    n for n in CORE_FIELDS if not FIELDS_BY_NAME[n].askable
 ]
 
 #: A complete, plausible answer set. A high-risk profile on purpose, so the
@@ -136,7 +142,7 @@ def test_the_app_starts_without_raising() -> None:
 
 def test_the_answer_set_covers_every_contract_field() -> None:
     """Guards the fixture itself: a renamed field must not silently skip a row."""
-    assert sorted(ANSWERS) == sorted(QUESTION_ORDER)
+    assert sorted(ANSWERS) == sorted(f.name for f in FIELDS)
 
 
 def test_the_synthetic_data_disclaimer_is_visible() -> None:
@@ -157,7 +163,7 @@ def test_the_synthetic_data_disclaimer_is_visible() -> None:
 def test_the_checklist_counts_the_contract_from_the_start() -> None:
     app = start()
 
-    assert "Tus datos · 0 de 25" in visible_text(app)
+    assert "Tus datos · 0 de 8" in visible_text(app)
 
 
 def test_the_checklist_ticks_a_field_as_soon_as_it_arrives() -> None:
@@ -166,20 +172,20 @@ def test_the_checklist_ticks_a_field_as_soon_as_it_arrives() -> None:
     say(app, "54")
 
     text = visible_text(app)
-    assert "Tus datos · 1 de 25" in text
+    assert "Tus datos · 1 de 8" in text
     assert "[x] Edad · 54 años" in text
-    assert "[ ] Sexo" in text
+    assert "[ ] Angina de esfuerzo" in text
 
 
-def test_the_checklist_never_shows_the_datasets_own_vocabulary() -> None:
-    """The contract stores `Male`; a person must not read that."""
+def test_the_checklist_shows_a_boolean_in_spanish() -> None:
+    """The contract stores True; a person must not read that."""
     app = start()
     say(app, "54")
-    say(app, "hombre")
+    say(app, "sí")
 
     text = visible_text(app)
-    assert "[x] Sexo · hombre" in text
-    assert "Male" not in text
+    assert "[x] Angina de esfuerzo · sí" in text
+    assert "True" not in text
 
 
 def test_the_checklist_groups_each_number_by_where_it_comes_from() -> None:
@@ -187,10 +193,10 @@ def test_the_checklist_groups_each_number_by_where_it_comes_from() -> None:
     app = start()
 
     text = visible_text(app)
+    # Only the sources of the core fields: systolic pressure and resting pulse are
+    # not asked for any more, so their headings are gone with them.
     for heading in (
         "Análisis de sangre",
-        "Tensiómetro",
-        "Pulso en reposo",
         "Prueba de esfuerzo",
         "Electrocardiograma",
     ):
@@ -235,7 +241,7 @@ def test_a_turn_adds_one_user_bubble_and_one_assistant_bubble() -> None:
     bubbles = chat_bubbles(app)
     assert [role for role, _ in bubbles] == ["assistant", "user", "assistant"]
     assert bubbles[1][1] == "54"
-    assert "¿Cuál es tu sexo?" in bubbles[2][1]
+    assert "¿Sientes dolor o presión en el pecho cuando haces esfuerzo físico?" in bubbles[2][1]
 
 
 def test_an_answer_advances_to_the_next_question() -> None:
@@ -244,7 +250,7 @@ def test_an_answer_advances_to_the_next_question() -> None:
     say(app, "54")
 
     assert not app.exception
-    assert "¿Cuál es tu sexo?" in visible_text(app)
+    assert "¿Sientes dolor o presión en el pecho cuando haces esfuerzo físico?" in visible_text(app)
 
 
 def test_an_unusable_answer_is_asked_again_without_storing_it() -> None:
@@ -254,7 +260,7 @@ def test_an_unusable_answer_is_asked_again_without_storing_it() -> None:
 
     assert not app.exception
     assert "Necesito un número" in visible_text(app)
-    assert "¿Cuál es tu sexo?" not in visible_text(app)
+    assert "¿Sientes dolor o presión en el pecho cuando haces esfuerzo físico?" not in visible_text(app)
 
 
 # --- the band, which is the point of the demo -------------------------------
@@ -267,7 +273,7 @@ def test_stopping_early_shows_the_band_and_refuses_a_verdict() -> None:
     say(app, "listo")
 
     assert not app.exception
-    assert metric(app, "Campos con datos reales") == "2 / 25"
+    assert metric(app, "Datos reales de los que pedimos") == "2 / 8"
     assert metric(app, "Confianza") == "sin veredicto"
     text = visible_text(app)
     assert "no alcanza para decirte nada" in text
@@ -300,7 +306,7 @@ def test_a_complete_interview_reaches_full_coverage_and_a_verdict() -> None:
         say(app, ANSWERS[name])
 
     assert not app.exception
-    assert metric(app, "Campos con datos reales") == "25 / 25"
+    assert metric(app, "Datos reales de los que pedimos") == "8 / 8"
     assert metric(app, "Confianza") == "alta"
     assert "Estimación del modelo" in visible_text(app)
 

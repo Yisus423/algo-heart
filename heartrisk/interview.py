@@ -30,12 +30,14 @@ plausibility bounds catch the absurd result and the question is re-asked.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from .safety import EMERGENCY_MESSAGE, detect_emergency
 from .schema import (
     ASKABLE_FIELDS,
+    CORE_FIELDS,
     FIELDS,
     FIELDS_BY_NAME,
     Field,
@@ -116,9 +118,30 @@ _NEGATIVE_CUES: dict[str, tuple[str, ...]] = {
 #: Question order: everything a person can answer from memory first, then the
 #: fields that only exist after a measurement. A user who quits early therefore
 #: still clears the coverage floor with real answers.
-_QUESTION_ORDER: tuple[Field, ...] = tuple(
-    f for f in FIELDS if f.name in set(ASKABLE_FIELDS)
-) + tuple(f for f in FIELDS if f.name not in set(ASKABLE_FIELDS))
+#: Core questions a person answers from memory, in measured order but with age
+#: first. Age is the one thing everybody can answer instantly and it sets the
+#: context for the rest; an interview whose first question is "do you have the max
+#: heart rate from a stress test" is not an interview.
+_CORE_ASKABLE_ORDER: tuple[str, ...] = ("age",) + tuple(
+    name
+    for name in CORE_FIELDS
+    if FIELDS_BY_NAME[name].askable and name != "age"
+)
+
+#: Everything the interview asks, in the order it asks it: the core questions from
+#: memory, then the core measurements, then the fields that are only accepted if
+#: the person volunteers them.
+_QUESTION_ORDER: tuple[Field, ...] = (
+    tuple(FIELDS_BY_NAME[name] for name in _CORE_ASKABLE_ORDER)
+    + tuple(
+        FIELDS_BY_NAME[name] for name in CORE_FIELDS if not FIELDS_BY_NAME[name].askable
+    )
+    + tuple(f for f in FIELDS if f.name not in set(CORE_FIELDS))
+)
+
+#: How many questions the interview asks in one turn when it has a model that can
+#: match several answers to several questions at once. See `next_batch`.
+BATCH_SIZE = 3
 
 
 def question_order() -> tuple[Field, ...]:
@@ -138,13 +161,13 @@ class InterviewState:
     Attributes:
         answers: contract field name to a validated value.
         skipped: fields the user declined or did not know.
-        pending: field currently being asked, if any.
+        pending: fields asked in the last turn and not yet resolved.
         finished: the interview ended, either completed or cut short.
     """
 
     answers: dict[str, object] = field(default_factory=dict)
     skipped: set[str] = field(default_factory=set)
-    pending: str | None = None
+    pending: tuple[str, ...] = ()
     finished: bool = False
 
     @property
@@ -152,16 +175,60 @@ class InterviewState:
         return set(self.answers) | self.skipped
 
     def next_field(self) -> Field | None:
-        """The next field worth asking about, or ``None`` when there is none."""
+        """The next core field to ask about, or ``None`` when there is none.
+
+        Only the core is chased. Anything else is welcome if the person volunteers
+        it, but the interview does not spend a turn on a field worth 0.35% of the
+        model.
+        """
         for candidate in _QUESTION_ORDER:
-            if candidate.name not in self.attempted:
+            if candidate.name in set(CORE_FIELDS) and candidate.name not in self.attempted:
                 return candidate
         return None
 
+    def next_batch(self) -> tuple[Field, ...]:
+        """The next core fields as a single ask, grouped by where the numbers come from.
+
+        Grouping is what makes a batch read as one question instead of three
+        demands: the numbers that come out of one blood test belong together,
+        systolic pressure does not belong with minutes of exercise.
+        """
+        missing = [
+            f.name
+            for f in _QUESTION_ORDER
+            if f.name in set(CORE_FIELDS) and f.name not in self.attempted
+        ]
+        if not missing:
+            return ()
+        head = FIELDS_BY_NAME[missing[0]]
+        together = [n for n in missing if _same_source(FIELDS_BY_NAME[n], head)]
+        return tuple(FIELDS_BY_NAME[n] for n in together[:BATCH_SIZE])
+
     def missing_measurements(self) -> tuple[Field, ...]:
+        """Core fields that need a measurement and are still unknown."""
         return tuple(
-            f for f in FIELDS if not f.askable and f.name not in self.answers
+            FIELDS_BY_NAME[name]
+            for name in CORE_FIELDS
+            if not FIELDS_BY_NAME[name].askable and name not in self.answers
         )
+
+
+def _same_source(a: Field, b: Field) -> bool:
+    """Whether two fields come from the same place, so one ask covers both."""
+    if a.askable and b.askable:
+        return True
+    if not a.askable and not b.askable:
+        return a.source_es == b.source_es
+    return False
+
+
+def batch_question(fields: Sequence[Field]) -> str:
+    """The contract's own wording for a whole batch, for paths that cannot phrase one.
+
+    One closing reminder instead of one per question.
+    """
+    body = " ".join(question_for(f, hint=False) for f in fields)
+    return f"{body} Si algo no lo sabes, dime \"no sé\" y seguimos."
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,12 +237,13 @@ class Turn:
 
     Attributes:
         messages: lines to show the user, in order.
-        asking: the field these messages ask about, if any.
+        asking: the fields these messages ask about, if any.
         complete: the interview is over.
     """
 
     messages: tuple[str, ...]
-    asking: str | None = None
+    #: Every field this turn asks about. More than one when the turn asks a batch.
+    asking: tuple[str, ...] = ()
     complete: bool = False
     #: The interview stopped because the text described an acute event.
     emergency: bool = False
@@ -320,8 +388,16 @@ def parse_answer(field: Field, text: str) -> object:
     return value
 
 
-def question_for(field: Field) -> str:
-    """The question, phrased so a lab value never sounds like common knowledge."""
+def question_for(field: Field, *, hint: bool = True) -> str:
+    """The question, phrased so a lab value never sounds like common knowledge.
+
+    ``hint=False`` drops the "say so if you do not know" reminder. A batch carries
+    that reminder once at the end; after every question it turns one ask into three
+    apologies.
+    """
+    source = f" (Sale de {field.needs_es}.)" if field.needs_es else ""
+    if not hint:
+        return f"{field.question_es}{source}"
     if field.needs_es:
         return (
             f"{field.question_es} "
@@ -334,49 +410,50 @@ def question_for(field: Field) -> str:
 class StubInterviewer:
     """Deterministic interviewer: ask, parse, validate, repeat.
 
-    Serves two purposes: the app runs with no network or API key, and the tests
-    have a stable contract to hold the language-model interviewer against.
+    It asks one field per turn and does not use the free-form opening. Matching
+    several answers in one message to several questions takes understanding, and
+    guessing wrong files a number under the wrong question, which is worse than
+    asking again. The language-model interviewer is the one that batches.
     """
 
     def opening(self) -> Turn:
+        first = _QUESTION_ORDER[0]
         return Turn(
             messages=(
-                "¡Hola! Soy el asistente de este demo. Voy a hacerte una serie de "
-                "preguntas para armar tu perfil.",
+                "¡Hola! Soy el asistente de este demo. Te haré unas pocas preguntas.",
                 "Puedes responder \"no sé\" en cualquiera y seguimos, o escribir "
                 "\"listo\" cuando quieras terminar.",
-                question_for(_QUESTION_ORDER[0]),
+                question_for(first),
             ),
-            asking=_QUESTION_ORDER[0].name,
+            asking=(first.name,),
         )
 
     def respond(self, text: str, state: InterviewState) -> Turn:
         emergency = emergency_turn(text)
         if emergency is not None:
-            # The pending field is left in place so the interview can resume.
             return emergency
 
-        pending = FIELDS_BY_NAME.get(state.pending) if state.pending else None
-
         if is_done(text):
-            state.pending = None
+            state.pending = ()
             state.finished = True
             return Turn(messages=("Listo. Veamos qué tenemos.",), complete=True)
 
-        if pending is not None:
+        pending = tuple(FIELDS_BY_NAME[name] for name in state.pending)
+
+        if pending:
+            asked = pending[0]
             if is_skip(text):
-                state.skipped.add(pending.name)
-                state.pending = None
+                state.skipped.add(asked.name)
             else:
                 try:
-                    state.answers[pending.name] = parse_answer(pending, text)
+                    state.answers[asked.name] = parse_answer(asked, text)
                 except SchemaError as exc:
                     # Re-ask the same field rather than storing an unusable value.
                     return Turn(
-                        messages=(str(exc), f"De nuevo: {question_for(pending)}"),
-                        asking=pending.name,
+                        messages=(str(exc), f"De nuevo: {question_for(asked)}"),
+                        asking=(asked.name,),
                     )
-                state.pending = None
+            state.pending = ()
 
         following = state.next_field()
         if following is None:
@@ -386,5 +463,5 @@ class StubInterviewer:
                 complete=True,
             )
 
-        state.pending = following.name
-        return Turn(messages=(question_for(following),), asking=following.name)
+        state.pending = (following.name,)
+        return Turn(messages=(question_for(following),), asking=(following.name,))

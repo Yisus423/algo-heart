@@ -101,7 +101,7 @@ def test_the_model_can_answer_the_field_being_asked_in_natural_language() -> Non
 
     assert state.answers["age"] == 62
     assert turn.asking == state.pending
-    assert turn.asking != "age"
+    assert "age" not in turn.asking
 
 
 def test_the_model_can_capture_fields_the_person_volunteered() -> None:
@@ -138,7 +138,7 @@ def test_an_impossible_value_from_the_model_is_not_stored() -> None:
     turn = interviewer.respond("tengo 500 años", state)
 
     assert "age" not in state.answers
-    assert turn.asking == "age"
+    assert "age" in turn.asking
 
 
 def test_a_rejected_value_is_reported_rather_than_dropped_in_silence() -> None:
@@ -177,6 +177,7 @@ def test_the_answer_is_still_captured_when_the_model_says_nothing_useful() -> No
     """Deterministic parsing backs up the field being asked, not the whole flow."""
     transport = FakeTransport([ModelReply(text="Ok.")])
     interviewer, state, _ = start(transport)
+    state.pending = ("age",)  # as if the batch had been asked
 
     interviewer.respond("62", state)
 
@@ -186,35 +187,40 @@ def test_the_answer_is_still_captured_when_the_model_says_nothing_useful() -> No
 def test_the_same_question_is_asked_again_when_nothing_can_be_understood() -> None:
     transport = FakeTransport([ModelReply(text="Disculpá, no te entendí.")])
     interviewer, state, _ = start(transport)
+    state.pending = ("age",)
 
     turn = interviewer.respond("y… ponele que si, qué se yo", state)
 
     assert "age" not in state.answers
-    assert turn.asking == "age"
+    assert turn.asking == ("age",)
 
 
 def test_a_skip_marks_the_field_and_moves_on() -> None:
     transport = FakeTransport([ModelReply(text="Sin problema.")])
     interviewer, state, _ = start(transport)
+    state.pending = ("age",)
 
     turn = interviewer.respond("no sé", state)
 
     assert "age" in state.skipped
-    assert turn.asking != "age"
+    assert "age" not in turn.asking
 
 
-def test_the_interview_finishes_once_every_field_is_resolved() -> None:
-    interviewer, state, _ = start(FakeTransport())
-    turn = Turn(messages=(), asking=state.pending)
+def test_the_interview_finishes_once_the_core_is_resolved() -> None:
+    """Eight questions, not twenty-five: that was the user's complaint."""
+    from heartrisk.schema import CORE_FIELDS
 
-    for _ in range(60):
+    interviewer, state, turn = start(FakeTransport())
+
+    for _ in range(40):
         if turn.complete:
             break
+        state.pending = turn.asking
         turn = interviewer.respond("no sé", state)
 
     assert turn.complete
     assert state.finished
-    assert len(state.attempted) == len(FIELDS)
+    assert state.attempted == set(CORE_FIELDS)
 
 
 def test_the_model_never_sees_the_target_column() -> None:
@@ -268,7 +274,7 @@ def test_the_question_is_phrased_in_a_second_call_without_tools() -> None:
 
     sent = transport.calls[1]["contents"][0]["parts"][0]["text"]  # type: ignore[index]
     assert "sin responderla" in sent, "or the model answers the question itself"
-    assert "¿Cuál es tu sexo?" in sent, "and it is told which question to rephrase"
+    assert "¿Sientes dolor o presión en el pecho cuando haces esfuerzo físico?" in sent, "and it is told which question to rephrase"
 
 
 def test_the_contracts_wording_is_used_when_the_phrasing_call_returns_nothing() -> None:
@@ -278,7 +284,7 @@ def test_the_contracts_wording_is_used_when_the_phrasing_call_returns_nothing() 
 
     turn = interviewer.respond("tengo 62", state)
 
-    assert turn.messages[-1].startswith("¿Cuál es tu sexo?")
+    assert turn.messages[-1].startswith("¿Sientes dolor o presión en el pecho cuando haces esfuerzo físico?")
 
 
 def test_a_reply_without_a_question_mark_is_not_used_as_the_question() -> None:
@@ -289,7 +295,7 @@ def test_a_reply_without_a_question_mark_is_not_used_as_the_question() -> None:
 
     turn = interviewer.respond("tengo 62", state)
 
-    assert turn.messages[-1].startswith("¿Cuál es tu sexo?")
+    assert turn.messages[-1].startswith("¿Sientes dolor o presión en el pecho cuando haces esfuerzo físico?")
 
 
 def test_a_failing_model_degrades_instead_of_crashing() -> None:
@@ -304,11 +310,12 @@ def test_a_failing_model_degrades_instead_of_crashing() -> None:
     turn = interviewer.opening()
     state.pending = turn.asking
 
+    state.pending = ("age",)  # as if the batch had been asked
     turn = interviewer.respond("62", state)
 
     assert state.answers["age"] == 62, "the answer must not be lost"
     assert "cortó la conexión" in turn.messages[0]
-    assert turn.asking == "sex", "and the interview keeps moving"
+    assert turn.asking, "and the interview keeps moving"
 
 
 def test_the_app_acknowledges_when_the_model_returns_no_text() -> None:

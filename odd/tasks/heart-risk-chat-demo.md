@@ -231,3 +231,35 @@ The first version of that call then produced nonsense: sending the bare question
 Grouping by `needs_es` also read as a sentence fragment — "un tensiómetro — ○ Presión sistólica en reposo" — so the contract grew a `source_es` short heading, and a test fails if a measurement field does not declare one. The short heading lives in the contract rather than in the app so a new field cannot ship without it.
 
 **L44 (a Streamlit gotcha that cost a screenshot, this session):** Streamlit hot-reloads the entry script but **not the modules it imports**, so a change under `heartrisk/` needs a server restart. A capture failed with no chat input because the running process still had the old `heartrisk.schema` in `sys.modules`, and `source_group` did not exist in it. Worth remembering before concluding that a change broke the app.
+
+**L45 (the user's sharpest critique, and the measurement that answers it, this session):** "la verdad es que veo cómo algo muy tedioso rellenar los 25 campos respuesta por respuesta". They are right, and it is a defect of the interview design rather than of the visuals: 25 answers, one per turn, is a questionnaire wearing a chat's clothes.
+
+Measured before deciding anything, with a 300-tree forest's feature importances on the full release and a top-k curve read at the same recall target:
+
+| fields | recall | precision | PR-AUC |
+| --- | --- | --- | --- |
+| top 4 | 0.850 | 0.616 | 0.825 |
+| top 6 | 0.850 | 0.701 | 0.870 |
+| **top 8** | 0.850 | **0.719** | **0.880** |
+| top 14 | 0.850 | 0.726 | 0.883 |
+| all 25 | 0.852 | 0.734 | 0.887 |
+| interview answers only | 0.853 | 0.518 | 0.745 |
+
+Eight fields carry 98% of what twenty-five do. Worse, three questions contribute almost nothing: `sex` 0.61%, `family_history` 0.48%, `wearable_owner` 0.35% — the app was asking whether someone wears a smartwatch to gain a third of a percent. The first version of this measurement was also wrong: it picked the loosest threshold instead of the strictest, so every row read `recall 1.000`. Only the PR-AUC column was usable, and the run was redone with `train.choose_threshold`, the same function the artifact uses.
+
+The user chose: a free-form opening, then only what is missing, asked in batches.
+
+**L46 (the decision's consequence, flagged before implementing):** the coverage gate is defined over 25 fields, so asking 8 would put a complete interview at 32% and the system would refuse to give a verdict. Coverage has to be measured over the fields the interview actually chases. The band is more honest that way in any case: today it treats a field worth 24% and a field worth 0.35% as equally valuable.
+
+**L47 (the redesigned interview, this session):** the flow the user chose is in. Verified live: the free-form opening, then one messy paragraph — "tengo 62, mi viejo tuvo un infarto, fumo desde los 20, peso 95 y mido 1,72, camino como 3000 pasos y hago unos 20 minutos de ejercicio por semana" — captured **five fields** in one message, and the next ask was a batch of two, phrased by the model as a single message. The core needs about four turns instead of twenty-five. The sidebar went from twenty-five rows to eight checkboxes in four groups.
+
+Two real bugs surfaced while implementing, both caught by tests rather than by review:
+
+1. **`next_field` iterated the importance order**, so after `age` the interview asked for a maximum heart rate from a stress test. Importance is a measure of value, not a sane order to ask in; the order is now the core questions from memory with `age` first, then the core measurements.
+2. **The degraded path lost the person's answer.** `_offline_turn` asked a batch, but with the free-form opening there is no pending field, so when the model failed the deterministic parser had nothing to try against and the message was dropped. It asks one question at a time now, because only the model can match several free-text answers to several questions; guessing wrong there files a number under the wrong question.
+
+A batch also carried "si no lo sabes, dime no sé" after *every* question, which turned one ask into three apologies. It carries it once, at the end.
+
+Tradeoffs, stated rather than hidden: two model calls per turn (extraction plus phrasing), and the free-form opening depends on the person writing something. Someone who answers "hola" simply receives the first batch of questions, which is the old behaviour.
+
+**L48 (the measured answer to a design complaint):** the interview was shortened because the user called it tedious, and the numbers say the shortening is nearly free: eight fields give precision 0.719 against 0.734 for all twenty-five. The band now measures coverage over the eight the interview asks for, which is both necessary and more honest — the old denominator counted a field worth 24% and a field worth 0.35% as equal.

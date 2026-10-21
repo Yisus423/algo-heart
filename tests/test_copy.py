@@ -100,7 +100,7 @@ def test_the_interviewer_opens_in_a_neutral_register() -> None:
 
     opening = " ".join(StubInterviewer().opening().messages)
 
-    assert "Voy a hacerte" in opening
+    assert "Te haré unas pocas preguntas" in opening
     assert "Puedes responder" in opening
 
 

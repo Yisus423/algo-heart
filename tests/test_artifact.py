@@ -20,6 +20,7 @@ from heartrisk.artifact import Artifact
 from heartrisk.data import clean
 from heartrisk.schema import (
     ASKABLE_FIELDS,
+    CORE_FIELDS,
     FEATURE_ORDER,
     FIELDS_BY_NAME,
     SCHEMA_VERSION,
@@ -165,8 +166,11 @@ def test_predict_reports_every_field_it_had_to_fill_in(model) -> None:
 
     assert set(result.provided) == set(payload)
     assert set(result.imputed) == set(FIELDS_BY_NAME) - set(payload)
-    assert result.provided_count == 3
-    assert result.total_count == len(FIELDS_BY_NAME)
+    # The band counts the core, not the whole contract: `sex` and daily_steps were
+    # never asked for.
+    assert result.provided_count == 1
+    assert result.core_provided == ("age",)
+    assert result.total_count == len(CORE_FIELDS)
 
 
 def test_predict_is_order_independent(model) -> None:
@@ -228,7 +232,7 @@ def test_a_complete_interview_earns_a_verdict_at_the_low_confidence_end(model) -
 
     result = predict_module.predict(payload, model)
 
-    assert result.provided_count == len(ASKABLE_FIELDS)
+    assert result.provided_count == 4, "the four core questions from memory"
     assert result.estimate_available is True
     assert result.confidence == predict_module.Confidence.LOW
 
@@ -238,7 +242,7 @@ def test_a_full_record_earns_the_highest_confidence(model) -> None:
 
     result = predict_module.predict(payload, model)
 
-    assert result.provided_count == len(FIELDS_BY_NAME)
+    assert result.provided_count == len(CORE_FIELDS)
     assert result.coverage == 1.0
     assert result.confidence == predict_module.Confidence.HIGH
     assert result.imputed == ()
