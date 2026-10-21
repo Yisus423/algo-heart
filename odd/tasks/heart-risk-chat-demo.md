@@ -282,3 +282,7 @@ Verified by driving the real browser: the echo plus spinner during the wait, and
 2. **The input rendered above the person's own message and the spinner.** `st.chat_input` draws at its position in the flow, and I rendered the echo and the spinner *after* it. The answer is worked on in its own script run now, with the input hidden and the spinner in its place.
 
 Verified by driving the browser and looking: the message appears at once with the spinner below it and no stray input, and "listo" reaches the result screen. The layout complaint about the card was almost certainly the same bug seen from outside: they never reached the result screen, so the only card they could judge was the checklist, unchanged.
+
+**L51 (the checklist finally beside the warning, this session):** the user sent a screenshot: "la checklist sigue abajo, creo que debería estar al mismo nivel o alineada con la advertencia". They were right, and the cause was structural rather than cosmetic: `main` created the columns **twice**, once for the header and again for the conversation plus panel, so the checklist started below the entire header block instead of beside it. One pair of columns now wraps the whole page, header included, and the two top edges line up. Verified in a screenshot rather than assumed: both at y≈97.
+
+This is the third time in a row that what mattered was found by looking at a rendered page — after the buried verdict and the misplaced spinner. The pattern is worth naming: a passing test suite says the logic is right, and says nothing about whether the screen reads.

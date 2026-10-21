@@ -392,12 +392,17 @@ def main() -> None:
     if "messages" not in st.session_state:
         start_interview()
 
-    # Everything lives inside the conversation's column instead of running the full
-    # width of a projector. At 1350px the disclaimer was a disproportionate pink bar
-    # and the engine caption a 145-character line, and neither aligned with the chat
-    # underneath it.
-    header, _ = st.columns([3, 2], gap="large")
-    with header:
+    # One pair of columns for the whole page, header included. Creating the columns
+    # twice — once for the header and again for the conversation — started the
+    # checklist below the entire header block, so it floated a quarter of a screen
+    # under the warning it is supposed to sit beside. The user's words: "la checklist
+    # sigue abajo, creo que debería estar al mismo nivel o alineada con la advertencia".
+    conversation, panel = st.columns([3, 2], gap="large")
+
+    with panel:
+        render_data_checklist(st.session_state.interview)
+
+    with conversation:
         # The typeface is configured natively in .streamlit/config.toml, so this file
         # never injects raw HTML.
         st.error(DISCLAIMER, icon="⚠️")
@@ -429,16 +434,11 @@ def main() -> None:
             )
             st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
 
-    result: Prediction | None = st.session_state.result
-    if result is not None and st.session_state.interview.finished:
-        # The interview is over, so the conversation has nothing left to say: the
-        # result takes the screen. The user's read was right, and the transcript is
-        # one click away for whoever wants to check what was answered.
-        #
-        # It lives in the same column as the header rather than running the full
-        # width: a 1340px card under a 770px heading is the same misalignment the
-        # checklist used to have.
-        with st.columns([3, 2], gap="large")[0]:
+        result: Prediction | None = st.session_state.result
+        if result is not None and st.session_state.interview.finished:
+            # The interview is over, so the conversation has nothing left to say: the
+            # result takes the screen. The transcript stays one click away for whoever
+            # wants to check what was answered.
             render_band(result)
             with st.expander("Ver la conversación"):
                 for role, text in st.session_state.messages:
@@ -449,23 +449,28 @@ def main() -> None:
             if st.button("Empezar de nuevo", type="primary"):
                 start_interview()
                 st.rerun()
-        return
+            return
 
-    # Two columns instead of one narrow strip with a sidebar: the conversation keeps
-    # a readable measure, and the width a centred layout wasted now holds the
-    # checklist. The chat is the wider one on purpose.
-    conversation, panel = st.columns([3, 2], gap="large")
-
-    with panel:
-        render_data_checklist(st.session_state.interview)
-
-    with conversation:
         if st.session_state.get("emergency"):
             st.error(EMERGENCY_MESSAGE, icon="🚑")
 
         for role, text in st.session_state.messages:
             with st.chat_message(role, avatar="🫀" if role == "assistant" else None):
                 st.markdown(text)
+
+        if st.session_state.get("thinking"):
+            # The answer is worked on in its own script run, with the input hidden and
+            # the spinner in its place. Rendering the spinner after st.chat_input put
+            # the input *above* the person's own message and the loading state.
+            with st.chat_message("assistant", avatar="🫀"):
+                with st.spinner("Leyendo tu respuesta…"):
+                    apply_turn(
+                        interviewer().respond(
+                            st.session_state.pending_prompt, st.session_state.interview
+                        )
+                    )
+            st.session_state.thinking = False
+            st.rerun()
 
         if st.session_state.get("emergency"):
             if st.button("Seguir con la entrevista", type="primary"):
@@ -478,21 +483,6 @@ def main() -> None:
                 st.rerun()
             return
 
-        if st.session_state.get("thinking"):
-            # The answer is worked on in its own script run, with the input hidden and
-            # the spinner in its place. Rendering the spinner after st.chat_input put
-            # the input *above* the person's own message and the loading state, which
-            # is what it looked like on screen.
-            with st.chat_message("assistant", avatar="🫀"):
-                with st.spinner("Leyendo tu respuesta…"):
-                    apply_turn(
-                        interviewer().respond(
-                            st.session_state.pending_prompt, st.session_state.interview
-                        )
-                    )
-            st.session_state.thinking = False
-            st.rerun()
-
         if st.session_state.interview.finished:
             st.success("La entrevista terminó.", icon="✅")
             if st.button("Empezar de nuevo", type="primary"):
@@ -503,8 +493,8 @@ def main() -> None:
         prompt = st.chat_input("Escribe tu respuesta…")
         if prompt:
             # Show it and rerun immediately: Streamlit only paints the deltas it has
-            # already produced, and the transcript above was rendered before this
-            # handler ran, so the message would otherwise appear twenty seconds later.
+            # already produced, and the transcript was rendered before this handler
+            # ran, so the message would otherwise appear twenty seconds later.
             st.session_state.messages.append(("user", prompt))
             st.session_state.pending_prompt = prompt
             st.session_state.thinking = True
