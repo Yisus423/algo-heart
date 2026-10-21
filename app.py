@@ -195,9 +195,10 @@ def compute_result() -> Prediction | None:
 
 def render_band(result: Prediction) -> None:
     """Show coverage and confidence first, big; the verdict last, small."""
-    st.subheader("Qué tan sólido es este resultado")
+    with st.container(border=True):
+        st.subheader("Qué tan sólido es este resultado")
 
-    coverage_column, confidence_column = st.columns([2, 1])
+        coverage_column, confidence_column = st.columns([2, 1])
     with coverage_column:
         st.metric(
             "Datos reales de los que pedimos",
@@ -308,10 +309,9 @@ def render_data_checklist(state: InterviewState) -> None:
     readout. This is the part of the demo with teaching value: the strongest
     predictors in this dataset cannot be guessed, they have to be measured.
 
-    It lives in the sidebar on purpose. In the main column it took most of the
-    screen and pushed the conversation below the fold, which defeats the point of a
-    chat. Here the checklist stays visible and ticks itself while the chat keeps
-    the room.
+    It lives in its own column, beside the conversation. In the main column it took
+    most of the screen and pushed the chat below the fold; in a narrow centred
+    layout the rest of the page was empty. A column does both jobs.
     """
     # Only the core is listed. Twenty-five rows turned the checklist into a wall, and
     # seventeen of those fields are not asked for anyway: they are accepted if the
@@ -336,7 +336,7 @@ def render_data_checklist(state: InterviewState) -> None:
     provided = [f.name for f in core if f.name in state.answers]
     beyond = [name for name in state.answers if name not in set(CORE_FIELDS)]
 
-    with st.sidebar:
+    with st.container(border=True):
         st.markdown(f"### Tus datos · {len(provided)} de {len(core)}")
         st.progress(len(provided) / len(core))
         for group in ordered:
@@ -359,84 +359,94 @@ def main() -> None:
     st.set_page_config(
         page_title="Riesgo cardíaco — demo académico",
         page_icon="🫀",
-        layout="centered",
+        layout="wide",
     )
-    # The typeface is configured natively in .streamlit/config.toml, so this file
-    # never injects raw HTML.
-    st.error(DISCLAIMER, icon="⚠️")
-    st.caption(DISCLAIMER_DETAIL)
-
-    st.title("Riesgo cardíaco")
-    st.caption(
-        "Cuéntame tus hábitos y, si los tienes, tus números. Al final te muestro qué "
-        "tan sólido es el resultado y qué te convendría medir."
-    )
-
     if load_model() is None:
         return
 
     if "messages" not in st.session_state:
         start_interview()
 
-    if isinstance(interviewer(), GeminiInterviewer):
-        # A caption, not a banner: the disclosure matters, but two full-width
-        # coloured banners before any content buried the interview itself.
+    # Everything lives inside the conversation's column instead of running the full
+    # width of a projector. At 1350px the disclaimer was a disproportionate pink bar
+    # and the engine caption a 145-character line, and neither aligned with the chat
+    # underneath it.
+    header, _ = st.columns([3, 2], gap="large")
+    with header:
+        # The typeface is configured natively in .streamlit/config.toml, so this file
+        # never injects raw HTML.
+        st.error(DISCLAIMER, icon="⚠️")
+        st.caption(DISCLAIMER_DETAIL)
+        st.title("Riesgo cardíaco")
         st.caption(
-            f"Motor de entrevista: {engine_label(interviewer())}. Tus respuestas se "
-            "envían a Google (plan gratuito), que puede usarlas para mejorar sus "
-            "modelos; no escribas datos reales de salud."
+            "Cuéntame tus hábitos y, si los tienes, tus números. Al final te muestro "
+            "qué tan sólido es el resultado y qué te convendría medir."
         )
-    else:
-        # A missing key is a loud state, not a silent downgrade: the demo still
-        # runs, and whoever deployed it needs to know it is running degraded.
-        st.warning(
-            "**Falta la API key de Gemini.** La app está corriendo con el "
-            "entrevistador determinista, que entiende mucho menos. Quien despliega "
-            f"esto configura el secreto `{API_KEY_ENV}` en "
-            "`.streamlit/secrets.toml` o en la sección de secretos del hosting. "
-            "**Los visitantes no necesitan aportar ninguna key.**",
-            icon="🔑",
-        )
-        st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
 
-    render_data_checklist(st.session_state.interview)
-
-    if st.session_state.get("emergency"):
-        st.error(EMERGENCY_MESSAGE, icon="🚑")
-
-    result: Prediction | None = st.session_state.result
-    if result is not None:
-        render_band(result)
-
-    st.divider()
-
-    for role, text in st.session_state.messages:
-        with st.chat_message(role, avatar="🫀" if role == "assistant" else None):
-            st.markdown(text)
-
-    if st.session_state.get("emergency"):
-        if st.button("Seguir con la entrevista", type="primary"):
-            st.session_state.emergency = False
-            pending = st.session_state.interview.pending
-            follow_up = (
-                question_for(FIELDS_BY_NAME[pending[0]]) if pending else "Seguimos."
+        if isinstance(interviewer(), GeminiInterviewer):
+            answering = getattr(interviewer(), "model", "")
+            st.caption(
+                f"Motor de entrevista: {engine_label(interviewer())}"
+                + (f" · {answering}" if answering else "")
+                + ". Tus respuestas se envían a Google (plan gratuito), que puede "
+                "usarlas para mejorar sus modelos; no escribas datos reales de salud."
             )
-            st.session_state.messages.append(("assistant", f"Listo. {follow_up}"))
-            st.rerun()
-        return
+        else:
+            # A missing key is a loud state, not a silent downgrade: the demo still
+            # runs, and whoever deployed it needs to know it is running degraded.
+            st.warning(
+                "**Falta la API key de Gemini.** La app está corriendo con el "
+                "entrevistador determinista, que entiende mucho menos. Quien "
+                f"despliega esto configura el secreto `{API_KEY_ENV}` en "
+                "`.streamlit/secrets.toml` o en la sección de secretos del hosting. "
+                "**Los visitantes no necesitan aportar ninguna key.**",
+                icon="🔑",
+            )
+            st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
 
-    if st.session_state.interview.finished:
-        st.success("La entrevista terminó.", icon="✅")
-        if st.button("Empezar de nuevo", type="primary"):
-            start_interview()
-            st.rerun()
-        return
+    # Two columns instead of one narrow strip with a sidebar: the conversation keeps
+    # a readable measure, and the width a centred layout wasted now holds the
+    # checklist. The chat is the wider one on purpose.
+    conversation, panel = st.columns([3, 2], gap="large")
 
-    prompt = st.chat_input("Escribe tu respuesta…")
-    if prompt:
-        st.session_state.messages.append(("user", prompt))
-        apply_turn(interviewer().respond(prompt, st.session_state.interview))
-        st.rerun()
+    with panel:
+        render_data_checklist(st.session_state.interview)
+
+    with conversation:
+        if st.session_state.get("emergency"):
+            st.error(EMERGENCY_MESSAGE, icon="🚑")
+
+        result: Prediction | None = st.session_state.result
+        if result is not None:
+            render_band(result)
+
+        for role, text in st.session_state.messages:
+            with st.chat_message(role, avatar="🫀" if role == "assistant" else None):
+                st.markdown(text)
+
+        if st.session_state.get("emergency"):
+            if st.button("Seguir con la entrevista", type="primary"):
+                st.session_state.emergency = False
+                pending = st.session_state.interview.pending
+                follow_up = (
+                    question_for(FIELDS_BY_NAME[pending[0]]) if pending else "Seguimos."
+                )
+                st.session_state.messages.append(("assistant", f"Listo. {follow_up}"))
+                st.rerun()
+            return
+
+        if st.session_state.interview.finished:
+            st.success("La entrevista terminó.", icon="✅")
+            if st.button("Empezar de nuevo", type="primary"):
+                start_interview()
+                st.rerun()
+            return
+
+        prompt = st.chat_input("Escribe tu respuesta…")
+        if prompt:
+            st.session_state.messages.append(("user", prompt))
+            apply_turn(interviewer().respond(prompt, st.session_state.interview))
+            st.rerun()
 
 
 # Streamlit executes this file as a script, so the app starts unconditionally.

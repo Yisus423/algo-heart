@@ -478,6 +478,16 @@ def encode_binary_category(field: Field, value: str) -> int:
     return field.categories.index(value)
 
 
+#: Interview values the app turns into a contract field, so the model never does
+#: arithmetic. They are declared here rather than in the serving layer because the
+#: tool schema is built from the contract, and a field the model cannot report is a
+#: field it silently drops.
+DERIVED_MEASUREMENTS: dict[str, tuple[float, float]] = {
+    "weight_kg": (2.0, 500.0),
+    "height_cm": (30.0, 300.0),
+}
+
+
 def derive_bmi(weight_kg: float, height_cm: float) -> float:
     """Return BMI from the two values the interview actually collects.
 

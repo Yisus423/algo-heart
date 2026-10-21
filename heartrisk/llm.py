@@ -47,17 +47,29 @@ from .interview import (
     question_for,
 )
 from .schema import (
+    DERIVED_MEASUREMENTS,
     FIELDS,
     FIELDS_BY_NAME,
     Field,
     SchemaError,
+    derive_bmi,
     rejection_message,
     to_native,
     validate_value,
 )
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-flash-latest"
 API_KEY_ENV = "GEMINI_API_KEY"
+
+#: Tried in order when one model is unavailable. Measured against this key rather
+#: than guessed: `gemini-2.5-flash`, `gemini-2.5-flash-lite` and `gemini-2.0-flash`
+#: all answer 404 NOT_FOUND, while both `-latest` aliases answer normally. A 503
+#: saying "high demand, spikes are usually temporary" is routine on the free tier
+#: and it is not a reason for a demo to die on stage.
+FALLBACK_MODELS: tuple[str, ...] = (
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+)
 
 #: Said by the app, not by the model. Gemini returns no text alongside a tool
 #: call, so leaving the acknowledgement to it produced a mute interviewer, and
@@ -76,7 +88,12 @@ PHRASING_PROMPT = (
 #: Accepted spellings, looked up in order. Streamlit's own documentation uses the
 #: upper-case form; Python developers tend to write the lower-case one.
 API_KEY_NAMES: tuple[str, ...] = ("GEMINI_API_KEY", "gemini_api_key")
-MODEL_NAMES: tuple[str, ...] = ("GEMINI_MODEL", "gemini_model")
+MODEL_NAMES: tuple[str, ...] = (
+    "GEMINI_MODEL",
+    "gemini_model",
+    "GEMINI_MODELS",
+    "gemini_models",
+)
 
 TOOL_NAME = "registrar_datos"
 TOOL_DESCRIPTION = (
@@ -171,9 +188,23 @@ def build_answer_tool() -> dict[str, object]:
         "parameters_json_schema": {
             "type": "object",
             "properties": {
-                contract_field.name: field_schema(contract_field)
-                for contract_field in FIELDS
-                if not contract_field.computed_from
+                **{
+                    contract_field.name: field_schema(contract_field)
+                    for contract_field in FIELDS
+                    if not contract_field.computed_from
+                },
+                # Weight and height are what the interview actually collects for BMI,
+                # and they are not contract fields, so they have to be declared here
+                # by hand. Without them the model had no way to report "peso 95 y mido
+                # 1,72" and both numbers were dropped on the floor.
+                "weight_kg": {
+                    "type": "number",
+                    "description": "Peso de la persona en kilogramos",
+                },
+                "height_cm": {
+                    "type": "number",
+                    "description": "Altura de la persona en centímetros",
+                },
             },
             "additionalProperties": False,
         },
@@ -201,17 +232,24 @@ def _response_text(response: object) -> str:
 class GeminiTransport:
     """``google-genai`` implementation of :class:`Transport`.
 
-    The import is deferred so that importing this module, and therefore running
-    the app with the deterministic interviewer, does not require the SDK.
+    It walks a chain of models instead of trusting one. The import is deferred so
+    that importing this module, and running the app with the deterministic
+    interviewer, does not require the SDK at all.
     """
 
     def __init__(
         self,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         api_key: str | None = None,
         temperature: float = 0.2,
+        models: Sequence[str] | None = None,
     ) -> None:
-        self.model = model
+        chain = tuple(models) if models else ((model,) if model else ()) + FALLBACK_MODELS
+        # Deduplicated, order preserved.
+        self._models: tuple[str, ...] = tuple(dict.fromkeys(m for m in chain if m))
+        if not self._models:
+            raise RuntimeError("no model configured")
+        self.model = self._models[0]
         self.temperature = temperature
         self._api_key = api_key or os.environ.get(API_KEY_ENV)
         if not self._api_key:
@@ -219,6 +257,14 @@ class GeminiTransport:
                 f"{API_KEY_ENV} is not set; export it, or use the deterministic "
                 "interviewer instead"
             )
+
+    def chain(self) -> tuple[str, ...]:
+        """The models to try, starting with whichever answered last time.
+
+        A fallback that worked stays first: the model that was busy a minute ago is
+        the least likely one to work now, and retrying it costs the user a turn.
+        """
+        return (self.model,) + tuple(m for m in self._models if m != self.model)
 
     def generate(
         self, system: str, contents: list[dict[str, object]], tool: dict[str, object] | None
@@ -240,21 +286,26 @@ class GeminiTransport:
                 )
             ]
         client = genai.Client(api_key=self._api_key)
-        response = client.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                temperature=self.temperature,
-                tools=tools,
-            ),
-        )
 
-        arguments: dict[str, object] = {}
-        for call in response.function_calls or []:
-            if call.name == TOOL_NAME and call.args:
-                arguments.update(dict(call.args))
-        return ModelReply(text=_response_text(response), arguments=arguments)
+        def attempt(model_name: str) -> ModelReply:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    temperature=self.temperature,
+                    tools=tools,
+                ),
+            )
+            arguments: dict[str, object] = {}
+            for call in response.function_calls or []:
+                if call.name == TOOL_NAME and call.args:
+                    arguments.update(dict(call.args))
+            return ModelReply(text=_response_text(response), arguments=arguments)
+
+        reply, answered = call_with_fallback(attempt, self.chain())
+        self.model = answered
+        return reply
 
 
 class GeminiInterviewer:
@@ -264,6 +315,11 @@ class GeminiInterviewer:
         self._transport = transport
         self._transcript: list[dict[str, object]] = []
         self._fallback = StubInterviewer()
+
+    @property
+    def model(self) -> str:
+        """Which model is answering, for the caption. Empty for other transports."""
+        return str(getattr(self._transport, "model", ""))
 
     def opening(self) -> Turn:
         """The free-form invitation, which only this interviewer can act on.
@@ -372,6 +428,30 @@ class GeminiInterviewer:
         phrased = reply.text.strip()
         return phrased if "?" in phrased else batch_question(fields)
 
+    def _store_derived(
+        self, arguments: dict[str, object], state: InterviewState
+    ) -> int:
+        """Turn the values the interview collects into the field they derive.
+
+        BMI comes from weight and height and never from the model's arithmetic, which
+        is why the tool schema asks for the two measurements rather than for a BMI.
+        """
+        collected: dict[str, float] = {}
+        for name, (low, high) in DERIVED_MEASUREMENTS.items():
+            raw = arguments.get(name)
+            if raw is None:
+                continue
+            native = to_native(raw)
+            if isinstance(native, bool) or not isinstance(native, (int, float)):
+                continue
+            if low <= float(native) <= high:
+                collected[name] = float(native)
+
+        if "bmi" in state.answers or set(collected) != set(DERIVED_MEASUREMENTS):
+            return 0
+        state.answers["bmi"] = derive_bmi(collected["weight_kg"], collected["height_cm"])
+        return 1
+
     def _offline_turn(
         self, text: str, state: InterviewState, pending: Field | None
     ) -> Turn:
@@ -441,7 +521,37 @@ class GeminiInterviewer:
                 continue
             state.answers[name] = native
             stored += 1
+
+        stored += self._store_derived(arguments, state)
         return rejected, stored
+
+
+def call_with_fallback(attempt, models, ) -> tuple[object, str]:
+    """Try each model in order, returning the result and the model that answered.
+
+    Kept out of the transport so the switching is testable without a network: the
+    failure this exists for is a routine 503, which is also the hardest kind to
+    reproduce on purpose.
+    """
+    last_error: Exception | None = None
+    for candidate in models:
+        try:
+            return attempt(candidate), candidate
+        except Exception as exc:  # noqa: BLE001 - any model failure means try the next
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("no models configured")
+
+
+def resolve_models(secrets: object | None = None, env: object | None = None) -> tuple[str, ...]:
+    """The model chain: whatever the deployment names, then the measured fallbacks.
+
+    ``GEMINI_MODELS`` takes a comma-separated list; ``GEMINI_MODEL`` takes one name.
+    """
+    configured = _lookup([secrets, os.environ if env is None else env], MODEL_NAMES) or DEFAULT_MODEL
+    named = tuple(part.strip() for part in configured.split(",") if part.strip())
+    return named + tuple(m for m in FALLBACK_MODELS if m not in named)
 
 
 def _lookup(sources: list[object], names: tuple[str, ...]) -> str | None:
@@ -476,7 +586,10 @@ def resolve_model(
 
 
 def build_interviewer(
-    api_key: str | None = None, model: str | None = None, secrets: object | None = None
+    api_key: str | None = None,
+    model: str | None = None,
+    secrets: object | None = None,
+    models: Sequence[str] | None = None,
 ) -> Interviewer:
     """Use Gemini when a key is available, otherwise the deterministic stub.
 
@@ -488,8 +601,9 @@ def build_interviewer(
     if not key:
         return StubInterviewer()
     try:
+        chain = tuple(models) if models else resolve_models(secrets)
         return GeminiInterviewer(
-            GeminiTransport(model=model or resolve_model(secrets), api_key=key)
+            GeminiTransport(model=model, api_key=key, models=chain)
         )
     except RuntimeError:
         return StubInterviewer()
@@ -506,8 +620,11 @@ __all__ = [
     "ModelReply",
     "TOOL_NAME",
     "Transport",
+    "FALLBACK_MODELS",
     "build_answer_tool",
     "build_interviewer",
+    "call_with_fallback",
+    "resolve_models",
     "field_schema",
     "resolve_api_key",
     "resolve_model",

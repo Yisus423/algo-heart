@@ -24,6 +24,7 @@ import pandas as pd
 
 from .schema import (
     CORE_FIELDS,
+    DERIVED_MEASUREMENTS,
     FEATURE_ORDER,
     FIELDS,
     FIELDS_BY_NAME,
@@ -45,12 +46,7 @@ MIN_COVERAGE = 0.5
 HIGH_CONFIDENCE_COVERAGE = 0.95
 MEDIUM_CONFIDENCE_COVERAGE = 0.75
 
-#: Interview values the app computes a field from, so the language model never
-#: does arithmetic. Each entry is a plausibility bound.
-DERIVED_MEASUREMENTS: dict[str, tuple[float, float]] = {
-    "weight_kg": (2.0, 500.0),
-    "height_cm": (30.0, 300.0),
-}
+#: Re-exported so callers keep importing it from the serving layer.
 
 
 class Confidence(str, Enum):

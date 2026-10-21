@@ -9,7 +9,7 @@
 base = "light"
 primaryColor = "#833AE0"
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F7F1FE"
+secondaryBackgroundColor = "#F1E7FE"
 # A lighter lavender than the #F0DAFF sampled from the reference chips: this
 # value paints the whole sidebar and the chat input, and at full strength it
 # turned an accent into a 300px block of colour. #F0DAFF is still named in

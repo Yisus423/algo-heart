@@ -9,9 +9,13 @@ wheels/
 # Virtual environments
 .venv
 
-# Derived data and trained artifacts (rebuilt by scripts/fetch_data.py and heartrisk.train)
+# Derived data, rebuilt by scripts/fetch_data.py and heartrisk.train
 data/processed/
-artifacts/
+
+# artifacts/ is NOT ignored on purpose. The app loads the frozen model at startup
+# and a deployment clones the repo fresh, with no way to run `python -m
+# heartrisk.train`: ignoring it produced "no hay modelo entrenado" on the deployed
+# site. The 6 MB joblib is the price of a demo that works where it is presented.
 
 # Tooling
 .pytest_cache/

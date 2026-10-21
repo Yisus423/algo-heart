@@ -13,6 +13,9 @@ import pytest
 from heartrisk.interview import InterviewState, Turn
 from heartrisk.llm import (
     DEFAULT_MODEL,
+    GeminiTransport,
+    call_with_fallback,
+    resolve_models,
     SYSTEM_PROMPT,
     GeminiInterviewer,
     ModelReply,
@@ -52,19 +55,20 @@ def test_the_tool_covers_every_field_the_interview_can_collect() -> None:
     tool = build_answer_tool()
     properties = tool["parameters_json_schema"]["properties"]  # type: ignore[index]
 
-    expected = {
-        f.name for f in FIELDS if not f.computed_from
-    }
-    assert set(properties) == expected
+    expected = {f.name for f in FIELDS if not f.computed_from}
+    # Plus the two values the interview collects so the model never divides.
+    assert set(properties) == expected | {"weight_kg", "height_cm"}
 
 
 def test_a_field_the_interview_computes_is_not_something_the_model_reports() -> None:
     """BMI is derived from weight and height, so the model must not guess it."""
     properties = build_answer_tool()["parameters_json_schema"]["properties"]  # type: ignore[index]
 
-    assert "bmi" not in properties
-    assert "weight_kg" not in properties
-    assert "height_cm" not in properties
+    assert "bmi" not in properties, "it is derived, not reported"
+    # But the two measurements it is derived from have to be reportable, or the
+    # model has no way to pass on "peso 95 y mido 1,72".
+    assert "weight_kg" in properties
+    assert "height_cm" in properties
 
 
 def test_a_numeric_field_declares_a_number_and_its_plausible_bounds() -> None:
@@ -251,6 +255,86 @@ def test_the_opening_does_not_need_the_network() -> None:
 
     assert turn.asking is not None
     assert transport.calls == []
+
+
+def test_a_busy_model_switches_to_the_next_one() -> None:
+    """A routine 503 on the free tier must not end the interview."""
+    tried: list[str] = []
+
+    def attempt(model: str) -> str:
+        tried.append(model)
+        if model != "second":
+            raise RuntimeError("503 UNAVAILABLE: high demand")
+        return "answered"
+
+    assert call_with_fallback(attempt, ("first", "second")) == ("answered", "second")
+    assert tried == ["first", "second"]
+
+
+def test_the_model_that_worked_goes_first_next_time() -> None:
+    """Retrying the busy one would cost the user a turn for nothing."""
+    transport = GeminiTransport(api_key="k", models=("busy", "working"))
+    transport.model = "working"
+
+    assert transport.chain() == ("working", "busy")
+
+
+def test_every_model_failing_raises_so_the_turn_can_degrade() -> None:
+    def attempt(model: str) -> str:
+        raise RuntimeError("503")
+
+    with pytest.raises(RuntimeError):
+        call_with_fallback(attempt, ("a", "b"))
+
+
+def test_the_configured_model_leads_and_the_measured_ones_follow() -> None:
+    """The fallbacks were measured against this key: the 2.5 names answer 404."""
+    models = resolve_models({"GEMINI_MODEL": "mine"})
+
+    assert models[0] == "mine"
+    assert models[1:] == ("gemini-flash-latest", "gemini-flash-lite-latest")
+
+
+def test_a_comma_separated_list_of_models_is_accepted() -> None:
+    assert resolve_models({"GEMINI_MODELS": "a, b"})[:2] == ("a", "b")
+
+
+def test_weight_and_height_from_the_model_become_a_bmi() -> None:
+    """BMI is derived in Python, so the model is never asked to divide.
+
+    It was a real bug that it had no way to report them: the tool schema skips `bmi`
+    because it is computed, and weight and height are not contract fields, so a
+    message containing "peso 95 y mido 1,72" lost both numbers.
+    """
+    transport = FakeTransport(
+        [ModelReply(arguments={"weight_kg": 95, "height_cm": 172})]
+    )
+    interviewer, state, _ = start(transport)
+
+    interviewer.respond("peso 95 y mido 1,72", state)
+
+    assert state.answers["bmi"] == pytest.approx(95 / 1.72**2)
+
+
+def test_a_bmi_reported_by_the_model_is_refused() -> None:
+    """It is computed from two measurements, so a reported one is ignored."""
+    transport = FakeTransport([ModelReply(arguments={"bmi": 22})])
+    interviewer, state, _ = start(transport)
+
+    interviewer.respond("creo que tengo 22 de imc", state)
+
+    assert "bmi" not in state.answers
+
+
+def test_an_impossible_weight_is_not_used_to_derive_a_bmi() -> None:
+    transport = FakeTransport(
+        [ModelReply(arguments={"weight_kg": 900, "height_cm": 172})]
+    )
+    interviewer, state, _ = start(transport)
+
+    interviewer.respond("peso 900 kilos", state)
+
+    assert "bmi" not in state.answers
 
 
 def test_the_extraction_prompt_leaves_the_questions_to_the_system() -> None:
