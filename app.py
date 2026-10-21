@@ -61,6 +61,20 @@ CATEGORY_ES: dict[str, dict[str, str]] = {
 #: Group heading for the fields a person answers from memory.
 FROM_MEMORY = "De tus respuestas"
 
+VERDICT_TITLE = {
+    1: "Perfil del lado de mayor riesgo",
+    0: "Perfil del lado de menor riesgo",
+}
+
+VERDICT_NOTE = {
+    1: "Estimación de un modelo entrenado con datos **sintéticos**. No es un "
+    "diagnóstico, no dice que tengas ninguna condición, y no reemplaza una consulta "
+    "médica.",
+    0: "Estimación de un modelo entrenado con datos **sintéticos**. No es un "
+    "diagnóstico, y un resultado así **no descarta nada**: este modelo deja pasar "
+    "cerca de 1 de cada 7 casos en sus propios datos de prueba.",
+}
+
 CONFIDENCE_LABEL = {
     Confidence.NONE: "sin veredicto",
     Confidence.LOW: "baja",
@@ -194,71 +208,79 @@ def compute_result() -> Prediction | None:
 
 
 def render_band(result: Prediction) -> None:
-    """Show coverage and confidence first, big; the verdict last, small."""
-    with st.container(border=True):
-        st.subheader("Qué tan sólido es este resultado")
+    """The result, as the protagonist of the screen.
 
-        coverage_column, confidence_column = st.columns([2, 1])
-    with coverage_column:
-        st.metric(
-            "Datos reales de los que pedimos",
-            f"{result.provided_count} / {result.total_count}",
-            help="Cada campo sin dato real se completa con un promedio del dataset.",
-        )
-        st.progress(result.coverage)
+    The user, looking at the previous layout: "se ve que hacemos más énfasis en los
+    datos recolectados que en el resultado (casi ni se encuentra el resultado)". It
+    was true: the verdict was a grey caption under an expander and a divider, while
+    the loudest element on screen was a bold checklist of answers the person had
+    already given. Here the verdict is a heading with its own name, and coverage is
+    supporting detail rather than the headline.
+
+    The progress bar is gone on purpose. Inside a bordered container it measured
+    itself against the wrong width and rendered 8/8 as two thirds full; the metric
+    already states the number without lying.
+    """
+    with st.container(border=True):
+        st.caption("TU RESULTADO")
+
+        if result.label is None:
+            st.subheader("Sin veredicto")
+            st.markdown(
+                "Con esta cantidad de datos **no alcanza para decirte nada**. Un "
+                "número aquí sería inventado."
+            )
+        else:
+            st.subheader(VERDICT_TITLE[result.label])
+            st.markdown(VERDICT_NOTE[result.label])
+
+        st.divider()
+        confidence_column, coverage_column = st.columns(2)
+        with confidence_column:
+            st.metric("Confianza", CONFIDENCE_LABEL[result.confidence])
+        with coverage_column:
+            st.metric(
+                "Datos reales de los que pedimos",
+                f"{result.provided_count} / {result.total_count}",
+                help="Cada campo sin dato real se completa con un promedio del dataset.",
+            )
         if result.beyond_core:
             st.caption(
                 f"Y {len(result.beyond_core)} dato(s) más que aportaste y no pedimos: "
                 "cuentan para el resultado igual."
             )
-    with confidence_column:
-        st.metric("Confianza", CONFIDENCE_LABEL[result.confidence])
 
-    if not result.estimate_available:
-        st.warning(
-            "Con esta cantidad de datos **no alcanza para decirte nada**. "
-            "No hay veredicto: la respuesta honesta es que falta información."
-        )
-    else:
-        st.info(CONFIDENCE_NOTE[result.confidence])
+        if result.estimate_available:
+            st.info(CONFIDENCE_NOTE[result.confidence])
 
-    if result.missing_measurements:
-        st.markdown("#### Lo que falta, y de dónde sale")
-        grouped: dict[str, list[str]] = defaultdict(list)
-        for name in result.missing_measurements:
-            contract_field = FIELDS_BY_NAME[name]
-            grouped[contract_field.needs_es or "otra medición"].append(
-                contract_field.label_es
+        if result.out_of_distribution:
+            unusual = ", ".join(
+                FIELDS_BY_NAME[name].label_es for name in result.out_of_distribution
             )
-        for need, labels in grouped.items():
-            st.markdown(f"- **{need}** — {', '.join(sorted(labels))}")
-        st.caption(
-            "Estos campos no son cosas que uno recuerde de memoria: salen de un "
-            "estudio. El modelo los completa con promedios, así que la estimación "
-            "mejora mucho si los tienes."
-        )
+            st.warning(
+                f"Estos valores están fuera del rango que el modelo vio al entrenar: "
+                f"{unusual}. La estimación es menos confiable para este perfil."
+            )
 
-    if result.out_of_distribution:
-        unusual = ", ".join(
-            FIELDS_BY_NAME[name].label_es for name in result.out_of_distribution
-        )
-        st.warning(
-            f"Estos valores están fuera del rango que el modelo vio al entrenar: "
-            f"{unusual}. La estimación es menos confiable para este perfil."
-        )
-
-    with st.expander(f"Campos completados con promedios ({len(result.imputed)})"):
-        if not result.imputed:
-            st.write("Ninguno: todos los campos tienen un valor real.")
-        else:
-            for name in result.imputed:
-                st.markdown(
-                    f"- {FIELDS_BY_NAME[name].label_es}"
-                    f"{f' ({FIELDS_BY_NAME[name].unit_es})' if FIELDS_BY_NAME[name].unit_es else ''}"
+        if result.missing_measurements:
+            st.markdown("#### Lo que falta, y de dónde sale")
+            grouped: dict[str, list[str]] = defaultdict(list)
+            for name in result.missing_measurements:
+                contract_field = FIELDS_BY_NAME[name]
+                grouped[contract_field.needs_es or "otra medición"].append(
+                    contract_field.label_es
                 )
+            for need, labels in grouped.items():
+                st.markdown(f"- **{need}** — {', '.join(sorted(labels))}")
 
-    st.divider()
-    render_verdict(result)
+        with st.expander(f"Campos completados con promedios ({len(result.imputed)})"):
+            if not result.imputed:
+                st.write("Ninguno: todos los campos tienen un valor real.")
+            else:
+                for name in result.imputed:
+                    contract_field = FIELDS_BY_NAME[name]
+                    unit = f" ({contract_field.unit_es})" if contract_field.unit_es else ""
+                    st.markdown(f"- {contract_field.label_es}{unit}")
 
 
 def render_verdict(result: Prediction) -> None:
@@ -406,6 +428,28 @@ def main() -> None:
             )
             st.caption(f"Motor de entrevista: {engine_label(interviewer())}")
 
+    result: Prediction | None = st.session_state.result
+    if result is not None and st.session_state.interview.finished:
+        # The interview is over, so the conversation has nothing left to say: the
+        # result takes the screen. The user's read was right, and the transcript is
+        # one click away for whoever wants to check what was answered.
+        #
+        # It lives in the same column as the header rather than running the full
+        # width: a 1340px card under a 770px heading is the same misalignment the
+        # checklist used to have.
+        with st.columns([3, 2], gap="large")[0]:
+            render_band(result)
+            with st.expander("Ver la conversación"):
+                for role, text in st.session_state.messages:
+                    with st.chat_message(
+                        role, avatar="🫀" if role == "assistant" else None
+                    ):
+                        st.markdown(text)
+            if st.button("Empezar de nuevo", type="primary"):
+                start_interview()
+                st.rerun()
+        return
+
     # Two columns instead of one narrow strip with a sidebar: the conversation keeps
     # a readable measure, and the width a centred layout wasted now holds the
     # checklist. The chat is the wider one on purpose.
@@ -417,10 +461,6 @@ def main() -> None:
     with conversation:
         if st.session_state.get("emergency"):
             st.error(EMERGENCY_MESSAGE, icon="🚑")
-
-        result: Prediction | None = st.session_state.result
-        if result is not None:
-            render_band(result)
 
         for role, text in st.session_state.messages:
             with st.chat_message(role, avatar="🫀" if role == "assistant" else None):
@@ -447,7 +487,15 @@ def main() -> None:
         prompt = st.chat_input("Escribe tu respuesta…")
         if prompt:
             st.session_state.messages.append(("user", prompt))
-            apply_turn(interviewer().respond(prompt, st.session_state.interview))
+            # Streamlit paints the deltas it has already produced, and the transcript
+            # above was rendered before this handler ran, so without echoing here the
+            # person watches a frozen page for the twenty seconds two model calls take.
+            # The echo plus the spinner is the entire feedback budget of a turn.
+            with st.chat_message("user", avatar=None):
+                st.markdown(prompt)
+            with st.chat_message("assistant", avatar="🫀"):
+                with st.spinner("Leyendo tu respuesta…"):
+                    apply_turn(interviewer().respond(prompt, st.session_state.interview))
             st.rerun()
 
 

@@ -263,3 +263,14 @@ A batch also carried "si no lo sabes, dime no sé" after *every* question, which
 Tradeoffs, stated rather than hidden: two model calls per turn (extraction plus phrasing), and the free-form opening depends on the person writing something. Someone who answers "hola" simply receives the first batch of questions, which is the old behaviour.
 
 **L48 (the measured answer to a design complaint):** the interview was shortened because the user called it tedious, and the numbers say the shortening is nearly free: eight fields give precision 0.719 against 0.734 for all twenty-five. The band now measures coverage over the eight the interview asks for, which is both necessary and more honest — the old denominator counted a field worth 24% and a field worth 0.35% as equal.
+
+**L49 (the result screen and the wait, from the user's screenshots, this session):** four observations, all correct:
+
+1. "la card quedó abajo y se vé descuadrada en posición" — the result card and the header had different widths, and the conversation sat under the result, so the reading order was result, then greeting, then the answers that produced it.
+2. "para que el usuario no se desespere al esperar deberíamos hacer que su mensaje se vea directamente en el chat y mostrar un spinner cargando" — Streamlit paints only the deltas it has produced, and the transcript was rendered before the chat handler ran, so the person watched a frozen page for the twenty seconds two model calls take.
+3. "mostrar el chat cuando damos el resultado está de más" — once the interview is over the transcript says nothing.
+4. "se ve que hacemos más énfasis en los datos recolectados que en el resultado (casi ni se encuentra el resultado)" — the verdict was a grey caption below an expander and a divider, while the loudest element on screen was a bold checklist of answers already given. This is the same class of mistake as the icon font: the element with the most visual weight was not the element that mattered.
+
+What changed: the result screen replaces the conversation, the verdict is a heading with its own name ("Perfil del lado de mayor riesgo") inside the card, coverage and confidence are supporting metrics under a divider, the transcript is one collapsed click away, and the result card shares the header's column so both line up. `st.progress` is gone from the card: inside a bordered container it measured itself against the wrong width and drew 8/8 as two thirds full, which is worse than no bar at all — the metric states the number without lying. The wait now echoes the message immediately and shows a spinner, which is the whole feedback budget of a turn.
+
+Verified by driving the real browser: the echo plus spinner during the wait, and the aligned result screen afterwards.

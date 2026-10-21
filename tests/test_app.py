@@ -308,7 +308,8 @@ def test_a_complete_interview_reaches_full_coverage_and_a_verdict() -> None:
     assert not app.exception
     assert metric(app, "Datos reales de los que pedimos") == "8 / 8"
     assert metric(app, "Confianza") == "alta"
-    assert "Estimación del modelo" in visible_text(app)
+    # The verdict is a heading of its own now, not a grey caption at the bottom.
+    assert "Perfil del lado de" in visible_text(app)
 
 
 def test_the_verdict_never_claims_a_diagnosis() -> None:
@@ -316,7 +317,11 @@ def test_the_verdict_never_claims_a_diagnosis() -> None:
     for name in QUESTION_ORDER:
         say(app, ANSWERS[name])
 
-    verdict = " ".join(element.value for element in app.caption if "Estimación del modelo" in element.value)
+    verdict = " ".join(
+        element.value
+        for element in app.markdown
+        if "Perfil del lado de" in element.value or "No es un diagnóstico" in element.value
+    )
 
     assert "No es un diagnóstico" in verdict
     # No second-person claim that the person has a condition, in any variant.
