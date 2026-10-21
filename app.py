@@ -296,7 +296,9 @@ def format_value(contract_field, value: object) -> str:
     if contract_field.kind in ("categorical", "binary_category"):
         return CATEGORY_ES.get(contract_field.name, {}).get(str(value), str(value))
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        number = f"{value:g}"
+        # One decimal for a measurement, none for a whole number: "32.1 kg/m²" and
+        # "62 años", never "32.11243333333333 kg/m²" in front of an audience.
+        number = f"{value:g}" if float(value).is_integer() else f"{value:.1f}"
         return f"{number} {contract_field.unit_es}" if contract_field.unit_es else number
     return str(value)
 
