@@ -299,6 +299,30 @@ def test_a_comma_separated_list_of_models_is_accepted() -> None:
     assert resolve_models({"GEMINI_MODELS": "a, b"})[:2] == ("a", "b")
 
 
+def test_listo_ends_the_interview_on_the_model_path_too() -> None:
+    """"listo" only worked in the deterministic path, which made the result screen
+    unreachable with a key configured: the model kept re-asking forever."""
+    transport = FakeTransport()
+    interviewer, state, _ = start(transport)
+
+    turn = interviewer.respond("listo", state)
+
+    assert turn.complete
+    assert state.finished
+    assert transport.calls == [], "stopping must not need the model"
+
+
+def test_an_emergency_and_listo_are_shared_by_both_interviewers() -> None:
+    """They were duplicated, and the copy in the model path was the one missing."""
+    from heartrisk.interview import InterviewState, preflight_turn
+
+    state = InterviewState(pending=("age",))
+
+    assert preflight_turn("listo", state).complete
+    assert preflight_turn("me duele el pecho ahora", state).emergency
+    assert preflight_turn("tengo 62", state) is None
+
+
 def test_weight_and_height_from_the_model_become_a_bmi() -> None:
     """BMI is derived in Python, so the model is never asked to divide.
 

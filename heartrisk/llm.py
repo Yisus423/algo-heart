@@ -44,6 +44,7 @@ from .interview import (
     batch_question,
     is_skip,
     parse_answer,
+    preflight_turn,
     question_for,
 )
 from .schema import (
@@ -343,9 +344,12 @@ class GeminiInterviewer:
         )
 
     def respond(self, text: str, state: InterviewState) -> Turn:
-        emergency = emergency_turn(text)
-        if emergency is not None:
-            return emergency
+        # Emergency and "listo" are checked here too, not only in the deterministic
+        # path: without this the interview could not be cut short and the result was
+        # unreachable whenever a key was configured.
+        stop = preflight_turn(text, state)
+        if stop is not None:
+            return stop
 
         self._transcript.append({"role": "user", "parts": [{"text": text}]})
         pending = FIELDS_BY_NAME.get(state.pending[0]) if state.pending else None

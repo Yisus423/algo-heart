@@ -167,6 +167,7 @@ def start_interview() -> None:
     st.session_state.messages = []
     st.session_state.result = None
     st.session_state.emergency = False
+    st.session_state.thinking = False
     apply_turn(interviewer().opening())
 
 
@@ -477,6 +478,21 @@ def main() -> None:
                 st.rerun()
             return
 
+        if st.session_state.get("thinking"):
+            # The answer is worked on in its own script run, with the input hidden and
+            # the spinner in its place. Rendering the spinner after st.chat_input put
+            # the input *above* the person's own message and the loading state, which
+            # is what it looked like on screen.
+            with st.chat_message("assistant", avatar="🫀"):
+                with st.spinner("Leyendo tu respuesta…"):
+                    apply_turn(
+                        interviewer().respond(
+                            st.session_state.pending_prompt, st.session_state.interview
+                        )
+                    )
+            st.session_state.thinking = False
+            st.rerun()
+
         if st.session_state.interview.finished:
             st.success("La entrevista terminó.", icon="✅")
             if st.button("Empezar de nuevo", type="primary"):
@@ -486,16 +502,12 @@ def main() -> None:
 
         prompt = st.chat_input("Escribe tu respuesta…")
         if prompt:
+            # Show it and rerun immediately: Streamlit only paints the deltas it has
+            # already produced, and the transcript above was rendered before this
+            # handler ran, so the message would otherwise appear twenty seconds later.
             st.session_state.messages.append(("user", prompt))
-            # Streamlit paints the deltas it has already produced, and the transcript
-            # above was rendered before this handler ran, so without echoing here the
-            # person watches a frozen page for the twenty seconds two model calls take.
-            # The echo plus the spinner is the entire feedback budget of a turn.
-            with st.chat_message("user", avatar=None):
-                st.markdown(prompt)
-            with st.chat_message("assistant", avatar="🫀"):
-                with st.spinner("Leyendo tu respuesta…"):
-                    apply_turn(interviewer().respond(prompt, st.session_state.interview))
+            st.session_state.pending_prompt = prompt
+            st.session_state.thinking = True
             st.rerun()
 
 

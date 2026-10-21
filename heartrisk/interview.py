@@ -287,6 +287,25 @@ def is_done(text: str) -> bool:
     )
 
 
+def preflight_turn(text: str, state: InterviewState) -> Turn | None:
+    """The two checks that run before anything else, for every interviewer.
+
+    They used to live only in the deterministic path. The deterministic interviewer
+    honoured "listo" and the language-model one did not, so with a key configured the
+    interview could never be cut short and the result screen was unreachable — a
+    divergence between two implementations of the same interface, which is exactly
+    what a shared helper prevents.
+    """
+    emergency = emergency_turn(text)
+    if emergency is not None:
+        return emergency
+    if is_done(text):
+        state.pending = ()
+        state.finished = True
+        return Turn(messages=("Listo. Veamos qué tenemos.",), complete=True)
+    return None
+
+
 def emergency_turn(text: str) -> Turn | None:
     """Return a Turn that stops the interview, when the text describes an acute event.
 
@@ -429,14 +448,9 @@ class StubInterviewer:
         )
 
     def respond(self, text: str, state: InterviewState) -> Turn:
-        emergency = emergency_turn(text)
-        if emergency is not None:
-            return emergency
-
-        if is_done(text):
-            state.pending = ()
-            state.finished = True
-            return Turn(messages=("Listo. Veamos qué tenemos.",), complete=True)
+        stop = preflight_turn(text, state)
+        if stop is not None:
+            return stop
 
         pending = tuple(FIELDS_BY_NAME[name] for name in state.pending)
 
