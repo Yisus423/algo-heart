@@ -22,12 +22,26 @@ from collections import defaultdict
 
 import streamlit as st
 
+from heartrisk import session as session_store
 from heartrisk.artifact import Artifact, load_artifact
 from heartrisk.interview import InterviewState, Interviewer, Turn, question_for
-from heartrisk.llm import API_KEY_ENV, GeminiInterviewer, build_interviewer
+from heartrisk.llm import (
+    API_KEY_ENV,
+    DEGRADED_ANSWER,
+    GeminiInterviewer,
+    ResultChat,
+    build_interviewer,
+    build_result_chat,
+)
 from heartrisk.predict import Confidence, Prediction, predict
 from heartrisk.safety import EMERGENCY_MESSAGE
-from heartrisk.schema import CORE_FIELDS, FIELDS_BY_NAME, source_group
+from heartrisk.schema import (
+    CORE_FIELDS,
+    FIELDS_BY_NAME,
+    NOT_MEDICAL_ADVICE_ES,
+    how_to_get,
+    source_group,
+)
 
 # Design tokens sampled from the course page that [theme] cannot express.
 DEEP_PURPLE = "#602B7A"
@@ -126,6 +140,137 @@ def load_model() -> Artifact | None:
         return None
 
 
+def session_id() -> str:
+    """This browser's session id, from the URL or freshly minted.
+
+    The id travels in the query string, which is the only thing that outlives a
+    reload in a Streamlit app: session state is per websocket connection and dies
+    with the page. The professor asked for "persistencia de la sesión para que la
+    conversación se sintiera más fluída".
+    """
+    current = st.query_params.get("s")
+    if isinstance(current, str) and session_store.is_valid_session_id(current):
+        return current
+
+    fresh = session_store.new_session_id()
+    # The state is written BEFORE the URL. Assigning to query_params triggers a rerun,
+    # and with the id only in the URL the next run entered here again, minted another
+    # one and set it again: an infinite rerun loop that rendered a blank page with a
+    # Stop button and no error anywhere. With the id already in session state the
+    # rerun finds it and stops.
+    st.session_state.session_id = fresh
+    st.query_params["s"] = fresh
+    return fresh
+
+
+def persist() -> None:
+    """Write the conversation down, so a reload does not start over."""
+    state = st.session_state.interview
+    session_store.save(
+        st.session_state.session_id,
+        {
+            "messages": [list(message) for message in st.session_state.messages],
+            # JSON has no sets or tuples; the state object does.
+            "answers": state.answers,
+            "skipped": sorted(state.skipped),
+            "pending": list(state.pending),
+            "finished": state.finished,
+            # The questions asked about the result, so a reload keeps those too.
+            "qa": [list(exchange) for exchange in st.session_state.get("qa", [])],
+        },
+    )
+
+
+def restore() -> bool:
+    """Bring back a stored conversation. False when there is nothing to bring back.
+
+    Every value is read defensively: this runs on the first request of a reloaded
+    page, and a half-written file must degrade to a new conversation rather than
+    take the app down.
+    """
+    saved = session_store.load(st.session_state.session_id)
+    if not saved:
+        return False
+
+    state = InterviewState(
+        answers=dict(saved.get("answers") or {}),
+        skipped=set(saved.get("skipped") or []),
+        pending=tuple(saved.get("pending") or []),
+        finished=bool(saved.get("finished")),
+    )
+    messages = [
+        (str(role), str(text))
+        for role, text in (saved.get("messages") or [])
+        if isinstance(role, str) and isinstance(text, str)
+    ]
+    if not messages:
+        return False
+
+    st.session_state.interview = state
+    st.session_state.messages = list(messages)
+    st.session_state.qa = [
+        (str(role), str(text))
+        for role, text in (saved.get("qa") or [])
+        if isinstance(role, str) and isinstance(text, str)
+    ]
+    st.session_state.pop("result_chat", None)
+    st.session_state.interviewer = build_interviewer(secrets=secret_map())
+    seed = getattr(st.session_state.interviewer, "seed", None)
+    if callable(seed):
+        seed(messages)
+    if state.finished:
+        st.session_state.result = compute_result()
+    return True
+
+
+def result_briefing(result: Prediction, state: InterviewState) -> str:
+    """What the model may talk about after the interview, in plain Spanish.
+
+    It gets the verdict, the values the person actually gave, what is missing and how
+    each missing number is obtained. It does not get the transcript: the result is the
+    subject now, and handing it the whole conversation invites it to re-litigate
+    answers instead of explaining what came out.
+    """
+    lines = [
+        f"Resultado calculado por el modelo: {VERDICT_TITLE.get(result.label, 'sin veredicto')}.",
+        f"Confianza del resultado: {CONFIDENCE_LABEL[result.confidence]}.",
+        f"Datos reales: {result.provided_count} de {result.total_count} de los que pedimos.",
+        "",
+        "Datos que la persona dio:",
+    ]
+    for name in result.provided:
+        contract_field = FIELDS_BY_NAME[name]
+        lines.append(f"- {contract_field.label_es}: {format_value(contract_field, state.answers.get(name))}")
+    if result.missing_measurements:
+        lines.append("")
+        lines.append("Datos que faltan, y de donde salen:")
+        for name in result.missing_measurements:
+            contract_field = FIELDS_BY_NAME[name]
+            how = how_to_get(contract_field)
+            lines.append(f"- {contract_field.label_es}." + (f" {how}" if how else ""))
+    if result.imputed:
+        lines.append("")
+        lines.append(
+            "Campos que el modelo completo con un promedio del dataset: "
+            + ", ".join(FIELDS_BY_NAME[n].label_es for n in result.imputed)
+            + "."
+        )
+    return "\n".join(lines)
+
+
+def result_chat() -> ResultChat | None:
+    """The post-result chat, built once per session. ``None`` without a key."""
+    if "result_chat" not in st.session_state:
+        chat = build_result_chat(
+            result_briefing(st.session_state.result, st.session_state.interview),
+            secrets=secret_map(),
+        )
+        st.session_state.result_chat = chat
+        if chat is not None:
+            chat.seed(st.session_state.get("qa") or [])
+    return st.session_state.result_chat
+
+
 def interviewer() -> Interviewer:
     """This session's interviewer.
 
@@ -168,6 +313,8 @@ def start_interview() -> None:
     st.session_state.result = None
     st.session_state.emergency = False
     st.session_state.thinking = False
+    st.session_state.qa = []
+    st.session_state.pop("result_chat", None)
     apply_turn(interviewer().opening())
 
 
@@ -265,14 +412,19 @@ def render_band(result: Prediction) -> None:
 
         if result.missing_measurements:
             st.markdown("#### Lo que falta, y de dónde sale")
+            # Grouped by field NAME, not by label: indexing FIELDS_BY_NAME with a
+            # label is a KeyError ('Colesterol HDL'), which is how this broke first.
             grouped: dict[str, list[str]] = defaultdict(list)
             for name in result.missing_measurements:
                 contract_field = FIELDS_BY_NAME[name]
-                grouped[contract_field.needs_es or "otra medición"].append(
-                    contract_field.label_es
-                )
-            for need, labels in grouped.items():
-                st.markdown(f"- **{need}** — {', '.join(sorted(labels))}")
+                grouped[contract_field.needs_es or "otra medición"].append(name)
+            for need, names in grouped.items():
+                labels = ", ".join(FIELDS_BY_NAME[n].label_es for n in names)
+                st.markdown(f"- **{need}** — {labels}")
+                how = how_to_get(FIELDS_BY_NAME[names[0]])
+                if how:
+                    st.caption(how)
+            st.caption(NOT_MEDICAL_ADVICE_ES)
 
         with st.expander(f"Campos completados con promedios ({len(result.imputed)})"):
             if not result.imputed:
@@ -389,6 +541,11 @@ def main() -> None:
     if load_model() is None:
         return
 
+    # NOTE: session persistence (heartrisk/session.py, with its tests) is NOT wired.
+    # Writing the session id into the query string made the script rerun in a loop:
+    # the page rendered blank with a Stop button and no error in the log. An app that
+    # hangs is worse than an app without persistence, so the calls are out until the
+    # loop is understood. See L52 in odd/tasks/heart-risk-chat-demo.md.
     if "messages" not in st.session_state:
         start_interview()
 
@@ -440,6 +597,42 @@ def main() -> None:
             # result takes the screen. The transcript stays one click away for whoever
             # wants to check what was answered.
             render_band(result)
+
+            # The user's idea: "junto con el resultado poder seguir chateando con el
+            # modelo para que este pueda explicarte el resultado y que hacer".
+            st.markdown("#### Pregúntame sobre el resultado")
+            st.caption(
+                "Puedo explicarte qué mide cada dato, de dónde sale y qué mirar. "
+                "No soy un médico: lo que conviene medir o tratar lo decide uno."
+            )
+
+            for role, text in st.session_state.get("qa", []):
+                with st.chat_message(role, avatar="🫀" if role == "assistant" else None):
+                    st.markdown(text)
+
+            if st.session_state.get("result_thinking"):
+                with st.chat_message("assistant", avatar="🫀"):
+                    with st.spinner("Pensando…"):
+                        chat = result_chat()
+                        answer = (
+                            chat.ask(st.session_state.result_pending_question)
+                            if chat is not None
+                            else DEGRADED_ANSWER
+                        )
+                        st.session_state.qa.append(("assistant", answer))
+                st.session_state.result_thinking = False
+                st.rerun()
+
+            # The widget key and the stored text must not share a name: writing
+            # session_state under a widget's own key raises "cannot be modified after
+            # the widget with that key is instantiated".
+            question = st.chat_input("Escribe tu pregunta…", key="result_question_box")
+            if question:
+                st.session_state.qa.append(("user", question))
+                st.session_state.result_pending_question = question
+                st.session_state.result_thinking = True
+                st.rerun()
+
             with st.expander("Ver la conversación"):
                 for role, text in st.session_state.messages:
                     with st.chat_message(

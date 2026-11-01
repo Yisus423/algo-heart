@@ -573,6 +573,52 @@ def validate_value(field: Field, value: object) -> None:
     raise SchemaError(f"{field.name}: unsupported kind {field.kind!r}")
 
 
+#: How each group of numbers is actually obtained, in neutral Spanish and without
+#: prescribing anything. The professor asked for "que el modelo recomiende o de
+#: instrucciones para obtener algunos datos", and the honest version of that is how
+#: the value is produced, not what someone should go and do: which studies a person
+#: needs is a doctor's call, and the app says so.
+HOW_TO_GET_ES: dict[str, str] = {
+    "Tensiómetro": (
+        "La presión te la toman en dos minutos en cualquier farmacia o centro de "
+        "salud, y un tensiómetro de brazo en casa sirve igual. Conviene medirla "
+        "sentado y después de unos minutos de reposo."
+    ),
+    "Pulso en reposo": (
+        "Se cuenta con dos dedos en la muñeca o el cuello durante 30 segundos y se "
+        "multiplica por dos. Muchos relojes y tensiómetros lo muestran directamente."
+    ),
+    "Análisis de sangre": (
+        "Pídele a tu médico un perfil lipídico: es un análisis de sangre en ayunas "
+        "que trae el colesterol total, el HDL, el LDL y los triglicéridos juntos. La "
+        "glucemia y la hemoglobina glicosilada suelen pedirse en el mismo análisis."
+    ),
+    "Prueba de esfuerzo": (
+        "Ese valor sale de una prueba de esfuerzo, que es un estudio con indicación "
+        "médica y no algo para hacerse por cuenta propia. Si no la tienes, el modelo "
+        "completa el dato con un promedio del dataset y la estimación pierde fuerza."
+    ),
+    "Electrocardiograma": (
+        "Sale de un electrocardiograma: un estudio de minutos e indoloro. El valor "
+        "que usamos es el que el informe llama depresión del segmento ST."
+    ),
+}
+
+#: Shown with the list of missing numbers, because a list of studies with no framing
+#: reads like a prescription.
+NOT_MEDICAL_ADVICE_ES = (
+    "Nada de esto es una indicación médica: qué te conviene medir lo decide tu "
+    "médico, y esta lista es sólo lo que a este modelo le falta."
+)
+
+
+def how_to_get(field: Field) -> str | None:
+    """How the field's number is obtained, or ``None`` for what a person just knows."""
+    if field.askable:
+        return None
+    return HOW_TO_GET_ES.get(field.source_es or "")
+
+
 def source_group(field: Field) -> str:
     """Heading the field belongs under: where its number comes from.
 

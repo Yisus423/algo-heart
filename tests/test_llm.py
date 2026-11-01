@@ -13,6 +13,9 @@ import pytest
 from heartrisk.interview import InterviewState, Turn
 from heartrisk.llm import (
     DEFAULT_MODEL,
+    DEGRADED_ANSWER,
+    ResultChat,
+    build_result_chat,
     GeminiTransport,
     call_with_fallback,
     resolve_models,
@@ -359,6 +362,54 @@ def test_an_impossible_weight_is_not_used_to_derive_a_bmi() -> None:
     interviewer.respond("peso 900 kilos", state)
 
     assert "bmi" not in state.answers
+
+
+def test_the_result_chat_explains_with_the_result_as_context() -> None:
+    """Spec S17: after the verdict there is somewhere to ask."""
+    transport = FakeTransport([ModelReply(text="El resultado dice que tu LDL es alto.")])
+    chat = ResultChat(transport, "Resultado: perfil del lado de mayor riesgo.")
+
+    answer = chat.ask("¿qué significa?")
+
+    assert answer == "El resultado dice que tu LDL es alto."
+    system = str(transport.calls[0]["system"])
+    assert "perfil del lado de mayor riesgo" in system, "the verdict is its context"
+    assert transport.calls[0]["tool"] is None, "it cannot call tools, only explain"
+
+
+def test_the_result_chat_carries_the_conversation_between_questions() -> None:
+    transport = FakeTransport([ModelReply(text="Uno."), ModelReply(text="Dos.")])
+    chat = ResultChat(transport, "x")
+
+    chat.ask("primera")
+    chat.ask("segunda")
+
+    assert len(transport.calls[1]["contents"]) >= 3  # question, answer, question
+
+
+def test_the_result_chat_answers_something_even_when_the_model_fails() -> None:
+    """A question the person just typed cannot come back as a traceback."""
+
+    class Exploding:
+        def generate(self, system, contents, tool):  # noqa: ANN001, ANN201
+            raise RuntimeError("503")
+
+    assert ResultChat(Exploding(), "x").ask("¿qué hago?") == DEGRADED_ANSWER
+
+
+def test_the_result_chat_survives_a_reload() -> None:
+    transport = FakeTransport([ModelReply(text="ok")])
+    chat = ResultChat(transport, "x")
+
+    chat.seed([("user", "antes"), ("assistant", "respuesta anterior")])
+    chat.ask("ahora")
+
+    assert len(transport.calls[0]["contents"]) >= 3
+
+
+def test_without_a_key_there_is_no_result_chat() -> None:
+    """The app then shows the canned answer instead of calling anything."""
+    assert build_result_chat("x", secrets={}, api_key=None) is None
 
 
 def test_the_extraction_prompt_leaves_the_questions_to_the_system() -> None:

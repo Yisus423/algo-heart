@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from heartrisk.data import clean, load_raw, to_features
-from heartrisk.schema import FEATURE_ORDER, FIELDS, TARGET, SchemaError
+from heartrisk.schema import FEATURE_ORDER, FIELDS, FIELDS_BY_NAME, TARGET, SchemaError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RAW_PATH = REPO_ROOT / "data" / "raw" / "heart_disease_risk_2026.csv"
@@ -152,6 +152,23 @@ def test_every_measurement_field_names_its_source_and_its_short_heading() -> Non
         if not contract_field.askable:
             assert contract_field.needs_es, contract_field.name
             assert contract_field.source_es, contract_field.name
+
+
+def test_every_measurement_group_explains_how_to_get_its_numbers() -> None:
+    """The professor asked for instructions; a list of studies with no explanation
+    of where they come from is a prescription without a label."""
+    from heartrisk.schema import HOW_TO_GET_ES, how_to_get
+
+    for contract_field in FIELDS:
+        if not contract_field.askable:
+            assert how_to_get(contract_field), contract_field.name
+            assert len(HOW_TO_GET_ES[contract_field.source_es or ""]) > 60
+
+
+def test_a_question_a_person_already_knows_needs_no_instructions() -> None:
+    from heartrisk.schema import how_to_get
+
+    assert how_to_get(FIELDS_BY_NAME["age"]) is None
 
 
 def test_the_short_heading_is_not_the_sentence_phrase() -> None:

@@ -12,6 +12,9 @@ wheels/
 # Derived data, rebuilt by scripts/fetch_data.py and heartrisk.train
 data/processed/
 
+# Persisted conversations, one JSON per browser session
+data/sessions/
+
 # artifacts/ is NOT ignored on purpose. The app loads the frozen model at startup
 # and a deployment clones the repo fresh, with no way to run `python -m
 # heartrisk.train`: ignoring it produced "no hay modelo entrenado" on the deployed

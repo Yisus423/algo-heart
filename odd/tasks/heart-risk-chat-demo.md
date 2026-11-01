@@ -20,6 +20,10 @@ Numbered requirements. `S#` quote the user's exact words where the user supplied
 - **S10** — Credentials, corrected by the user: "la api deberia usarse mediante secrets para que los usuarios puedan entrar y probar sin poner API keys". The deployment owns the key and supplies it through Streamlit secrets, so a visitor never has to bring one. A missing key must be loud rather than a silent downgrade.
 - **S11** — Visual quality, deferred by the user: "la web te quedó re fea y con errores de diseño, dejemos eso de último". The redesign is tracked and deliberately last, after the behaviour is right.
 
+- **S15** - The professor's request: "podríamos agregar que el modelo recomiende o de instrucciones para obtener algunos datos". When a measurement is missing, the app says what it is and where it comes from; it should also say how to get it, in practical terms, without prescribing a study.
+- **S16** - The professor's request, quoted by the user: "quería persistencia de la sesión para que la conversación se sintiera más fluída". A page reload must not throw the conversation away.
+- **S17** - The user's idea: "junto con el resultado poder seguir chateando con el modelo para que este pueda explicarte el resultado y que hacer". After the verdict there is somewhere to ask.
+
 ## Measured baseline
 
 Two real measurements that answer different questions. Both are RandomForest on a stratified 75/25 split with `random_state=42`.
@@ -87,6 +91,9 @@ Recorded explicitly rather than quietly absorbed.
 | T10 | all | Independent verification required by the escalated plan | blocked: no subagent runtime available, see L26 | — |
 | T11 | S9 | Neutral Spanish across every user-facing string, including the interviewer's questions, the safety message and the model's system prompt | inline, test-first | `cabe47d` |
 | T12 | S10 | The key comes from Streamlit secrets so a visitor brings none, and a missing key is loud rather than a silent downgrade | inline, test-first | this commit |
+| T18 | S15 | How to obtain each missing measurement, in practical terms and without prescribing | inline, test-first | pending |
+| T19 | S16 | Session persistence: the conversation survives a reload | delegated, test-first | pending |
+| T20 | S17 | Keep talking after the result: the model explains the verdict and what to do | inline, test-first | pending |
 | T13 | S11 | Visual redesign pass: layout, spacing and the design errors the user flagged | pending, deliberately last per the user | — |
 
 T5 was planned as a separate task and turned out to be presentation logic that only makes sense next to the chat that produces the payload, so it was folded into T2+T3 rather than left pending.
@@ -286,3 +293,13 @@ Verified by driving the browser and looking: the message appears at once with th
 **L51 (the checklist finally beside the warning, this session):** the user sent a screenshot: "la checklist sigue abajo, creo que debería estar al mismo nivel o alineada con la advertencia". They were right, and the cause was structural rather than cosmetic: `main` created the columns **twice**, once for the header and again for the conversation plus panel, so the checklist started below the entire header block instead of beside it. One pair of columns now wraps the whole page, header included, and the two top edges line up. Verified in a screenshot rather than assumed: both at y≈97.
 
 This is the third time in a row that what mattered was found by looking at a rendered page — after the buried verdict and the misplaced spinner. The pattern is worth naming: a passing test suite says the logic is right, and says nothing about whether the screen reads.
+
+**L52 (T18 and T20 delivered, T19 built but not wired, this session):** the professor asked for instructions on obtaining data and for session persistence; the user asked to keep chatting after the result.
+
+T18 is in: `HOW_TO_GET_ES` gives, per group of numbers, how each one is actually obtained, in neutral Spanish and without prescribing anything, plus `NOT_MEDICAL_ADVICE_ES` so a list of studies does not read like a prescription. The result band shows it under each missing group.
+
+T20 is in: `ResultChat` explains a finished verdict with the result as its context and the same guardrails (the verdict is the only number it may cite, a doctor is the answer to anything medical), and `DEGRADED_ANSWER` means a question the person just typed never comes back as a traceback. Seven new tests, including that the answer arrives even when the model fails.
+
+T19 is **built and not wired**. `heartrisk/session.py` (172 lines, 18 tests from a delegated worker) does exactly what it should: opaque ids, atomic writes, never-raising loads, and it caught that `data/sessions/` was not gitignored. Wiring it, however, **hangs the app**: the page renders blank with a Stop button and nothing in the log. The likely cause is that assigning to `st.query_params` triggers a rerun, and the id lives in the URL; writing the id into session state *before* the URL did not settle it, and an experiment that disabled the URL write produced no usable evidence because no screenshot was captured. With a live deployment and a professor waiting, the calls were removed: an app that hangs is worse than an app without persistence. The module and its tests stay; the loop needs to be understood before it is connected.
+
+**L53 (the deploy, this session):** `https://algo-heart.streamlit.app/` answers `healthz` with 200 but serves only "Zzzz, this app has gone to sleep due to inactivity". Clicking the wake button did not bring it up in 150 seconds. That is a Streamlit Cloud container problem, not an application one, and it is the single biggest risk to the presentation: whoever opens the link cold may see a sleeping page.

@@ -341,6 +341,46 @@ def test_the_interview_can_be_restarted() -> None:
     assert not app.metric
 
 
+# --- talking about the result, spec S17 -------------------------------------
+
+
+def finished_app() -> AppTest:
+    app = start()
+    for name in QUESTION_ORDER:
+        say(app, ANSWERS[name])
+    return app
+
+
+def test_a_finished_interview_offers_a_place_to_ask() -> None:
+    app = finished_app()
+
+    assert "Pregúntame sobre el resultado" in visible_text(app)
+    assert app.chat_input, "the result chat has its own input"
+
+
+def test_the_result_chat_answers_without_a_key() -> None:
+    """The canned answer, so a typed question never comes back as a traceback."""
+    app = finished_app()
+
+    app.chat_input[0].set_value("¿qué significa esto?").run()
+
+    assert not app.exception
+    assert "No puedo consultar al modelo" in visible_text(app)
+
+
+def test_the_verdict_is_a_heading_and_not_a_caption() -> None:
+    """What keeps the verdict from being buried is being a heading of its own.
+
+    Comparing positions inside `visible_text` proves nothing: it joins the elements by
+    type, not in the order they render, so an index comparison across types is
+    meaningless. The visual order is what the screenshots are for.
+    """
+    app = finished_app()
+
+    assert app.subheader, "the verdict has its own heading"
+    assert "Perfil del lado de" in " ".join(element.value for element in app.subheader)
+
+
 # --- emergencies, spec S6 ---------------------------------------------------
 
 

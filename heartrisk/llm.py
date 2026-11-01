@@ -181,6 +181,91 @@ def field_schema(contract_field: Field) -> dict[str, object]:
     return schema
 
 
+#: Used after the interview, to explain a verdict that is already computed.
+RESULT_CHAT_PROMPT = (
+    "Eres el asistente de un demo académico sobre riesgo cardíaco. La entrevista ya "
+    "terminó y tienes el resultado y los datos de la persona delante. Tu tarea es "
+    "explicar qué significa ese resultado y qué se puede hacer al respecto, en "
+    "español neutro y tratándola de 'tú', en dos o tres frases.\n\n"
+    "Reglas:\n"
+    "- NUNCA digas que la persona tiene o puede tener una enfermedad. No des un "
+    "diagnóstico ni un porcentaje de riesgo propio: el único número que puedes citar "
+    "es el que ya aparece en el resultado.\n"
+    "- El modelo se entrenó con datos SINTÉTICOS. Dilo cuando expliques por qué este "
+    "resultado no sirve para decidir nada sobre su salud.\n"
+    "- Sí puedes explicar qué mide cada dato, cómo se obtiene y para qué sirve, "
+    "usando la información que se te da.\n"
+    "- Qué conviene medir o tratar lo decide un médico: deriva a uno cuando la "
+    "pregunta sea médica.\n"
+    "- Si la persona describe un síntoma agudo, no sigas: dile que llame a "
+    "emergencias.\n"
+)
+
+#: Used when the model cannot be reached, so the person is never left without an
+#: answer to a question they just typed.
+DEGRADED_ANSWER = (
+    "No puedo consultar al modelo en este momento. El resultado que ves arriba sigue "
+    "siendo el que calculó el modelo con tus datos, y para cualquier duda sobre tu "
+    "salud lo que corresponde es consultar a un médico."
+)
+
+
+class ResultChat:
+    """Answers questions about a finished result, with the result as context.
+
+    The user's idea: "junto con el resultado poder seguir chateando con el modelo
+    para que este pueda explicarte el resultado y que hacer". It keeps its own
+    transcript because the interview is over, and the guardrails are the same: the
+    verdict is the only number it may cite, and a doctor is the answer to anything
+    medical.
+    """
+
+    def __init__(self, transport: Transport, briefing: str) -> None:
+        self._transport = transport
+        self._briefing = briefing
+        self._history: list[dict[str, object]] = []
+
+    @property
+    def model(self) -> str:
+        """Which model is answering, for the caption."""
+        return str(getattr(self._transport, "model", ""))
+
+    def seed(self, exchanges: Sequence[tuple[str, str]]) -> None:
+        """Rebuild the conversation after a reload."""
+        self._history = [
+            {"role": "user" if role == "user" else "model", "parts": [{"text": text}]}
+            for role, text in exchanges
+        ]
+
+    def ask(self, question: str) -> str:
+        system = (
+            f"{RESULT_CHAT_PROMPT}\n\nEsto es lo que tienes que explicar:\n{self._briefing}"
+        )
+        self._history.append({"role": "user", "parts": [{"text": question}]})
+        try:
+            reply = self._transport.generate(system, list(self._history), None)
+        except Exception:
+            return DEGRADED_ANSWER
+        answer = reply.text.strip() or DEGRADED_ANSWER
+        self._history.append({"role": "model", "parts": [{"text": answer}]})
+        return answer
+
+
+def build_result_chat(
+    briefing: str, secrets: object | None = None, api_key: str | None = None
+) -> ResultChat | None:
+    """A result chat when there is a key, ``None`` when there is not."""
+    key = api_key or resolve_api_key(secrets)
+    if not key:
+        return None
+    try:
+        return ResultChat(
+            GeminiTransport(models=resolve_models(secrets), api_key=key), briefing
+        )
+    except RuntimeError:
+        return None
+
+
 def build_answer_tool() -> dict[str, object]:
     """The single tool the model may call."""
     return {
@@ -316,6 +401,17 @@ class GeminiInterviewer:
         self._transport = transport
         self._transcript: list[dict[str, object]] = []
         self._fallback = StubInterviewer()
+
+    def seed(self, messages: Sequence[tuple[str, str]]) -> None:
+        """Rebuild the model's view of a conversation restored from storage.
+
+        Without this a reload keeps the answers but loses everything the model was
+        told, so the next message arrives with no context and it extracts worse.
+        """
+        self._transcript = [
+            {"role": "user" if role == "user" else "model", "parts": [{"text": text}]}
+            for role, text in messages
+        ]
 
     @property
     def model(self) -> str:
@@ -625,8 +721,12 @@ __all__ = [
     "TOOL_NAME",
     "Transport",
     "FALLBACK_MODELS",
+    "DEGRADED_ANSWER",
+    "RESULT_CHAT_PROMPT",
+    "ResultChat",
     "build_answer_tool",
     "build_interviewer",
+    "build_result_chat",
     "call_with_fallback",
     "resolve_models",
     "field_schema",
